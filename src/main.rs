@@ -12,7 +12,10 @@
 
 use raylib::prelude::*;
 mod mapa;
+mod raycast;
+use raycast::{lanzar, Impacto, MAX_DIST};
 use mapa::{cargar, buscar, es_pared, char_en, libre, campo_desde, RADIO};
+
 
 // -------------------------------------------------- ventana
 const ANCHO: i32 = 960;
@@ -37,8 +40,6 @@ const ENEMIGO: Color = Color { r: 120, g: 220, b: 90, a: 255 };
 
 // -------------------------------------------------- raycasting
 const FOV: f32 = std::f32::consts::PI / 3.0;
-const PASO_RAYO: f32 = 0.02;
-const MAX_DIST: f32 = 40.0;
 const ANCHO_ESTACA: i32 = 2;
 const NUM_RAYOS_2D: usize = 80;
 
@@ -72,51 +73,7 @@ fn sombrear(c: Color, f: f32) -> Color {
     }
 }
 
-// ==================================================== el rayo
-struct Impacto {
-    d: f32,
-    ch: char,
-    tx: f32,
-}
 
-fn lanzar(grid: &[Vec<char>], x: f32, y: f32, ang: f32) -> Impacto {
-    let (dx, dy) = (ang.cos(), ang.sin());
-    let mut t = 0.0f32;
-    let (mut cx_ant, mut cy_ant) = (x.floor(), y.floor());
-
-    while t < MAX_DIST {
-        t += PASO_RAYO;
-        let hx = x + dx * t;
-        let hy = y + dy * t;
-        let ch = char_en(grid, hx, hy);
-
-        if es_pared(ch) {
-            let (cx, cy) = (hx.floor(), hy.floor());
-            let vertical = cx != cx_ant;
-
-            let mut tx = if vertical {
-                hy - hy.floor()
-            } else if cy != cy_ant {
-                hx - hx.floor()
-            } else {
-                hx - hx.floor()
-            };
-
-            if (vertical && dx > 0.0) || (!vertical && dy < 0.0) {
-                tx = 1.0 - tx;
-            }
-            return Impacto { d: t, ch, tx };
-        }
-
-        cx_ant = hx.floor();
-        cy_ant = hy.floor();
-    }
-    Impacto {
-        d: MAX_DIST,
-        ch: '+',
-        tx: 0.0,
-    }
-}
 
 // ==================================================== estado
 struct Estado {
