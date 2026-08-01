@@ -19,6 +19,7 @@ pub struct Estado {
     pub campo: Vec<i32>,
     pub t_recalc: f32,
     pub atrapado: bool,
+    pub anim_t: f32,
 }
 
 impl Estado {
@@ -26,6 +27,7 @@ impl Estado {
         let grid = cargar(path);
         let (pr, pc) = buscar(&grid, 'A').expect("el maze.txt no tiene 'A'");
         let cols = grid[0].len();
+       
 
         let campo = campo_desde(&grid, pr, pc);
         let mut spawn = None;
@@ -55,6 +57,7 @@ impl Estado {
             campo,
             t_recalc: 0.0,
             atrapado: false,
+            anim_t: 0.0,
         }
     }
 
@@ -83,7 +86,7 @@ impl Estado {
     }
 
     pub fn perseguir(&mut self, dt: f32) {
-        self.t_recalc -= dt;
+        self.anim_t += dt;
         if self.t_recalc <= 0.0 {
             let (pr, pc) = (self.y as usize, self.x as usize);
             self.campo = campo_desde(&self.grid, pr, pc);

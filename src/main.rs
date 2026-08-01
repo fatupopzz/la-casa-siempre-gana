@@ -55,7 +55,7 @@ fn main() {
     if juanjo.is_none() {
         println!("aviso: no encontre assets/juanjo.png, van paredes de color plano");
     }
-    let perseguidor_tex = rl.load_texture(&thread, "assets/perseguidor.png").ok();
+    let perseguidor_tex = rl.load_texture(&thread, "assets/sprites/sombra_sheet .png").ok();
     if perseguidor_tex.is_none() {
         println!("aviso: no encontre assets/perseguidor.png, el enemigo va invisible en 3D");
     }

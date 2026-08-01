@@ -18,7 +18,9 @@ const NUM_RAYOS_2D: usize = 80;
 const FOG: Color = Color { r: 6, g: 4, b: 4, a: 255 };
 const FOG_DENSITY: f32 = 0.22;
 const FOG_EDGE: f32 = 1.6;
-const STEP_PISO: i32 = 2; // alto en px de cada tira del piso
+const STEP_PISO: i32 = 2; // alto en px de cada tira draw_rectangle
+const SPRITE_FRAMES: usize = 4;
+const SPRITE_FPS: f32 = 4.0;
 
 fn color_de(ch: char) -> Color {
     match ch {
@@ -310,10 +312,12 @@ pub fn render_sprite(
     let ff = fog_factor(dist, spr_col_t);
     let fog_a = ((1.0 - ff) * 255.0) as u8;
 
-    let tw = tex.width as f32;
+   let frame_w = tex.width as f32 / SPRITE_FRAMES as f32;
     let th = tex.height as f32;
+    let frame = (est.anim_t * SPRITE_FPS) as usize % SPRITE_FRAMES;
+    let frame_ox = frame as f32 * frame_w;
     let paso = ANCHO_ESTACA as f32;
-    let sw = tw * (paso / tam);
+    let sw = frame_w * (paso / tam);
 
     let mut s = 0.0f32;
     while s < tam {
@@ -323,7 +327,7 @@ pub fn render_sprite(
             if col < zbuffer.len() && zbuffer[col] > dist_z {
                 dh.draw_texture_pro(
                     tex,
-                    Rectangle::new((s / tam) * tw, 0.0, sw, th),
+                    Rectangle::new(frame_ox + (s / tam) * frame_w, 0.0, sw, th),
                     Rectangle::new(x, top, paso, tam),
                     Vector2::zero(),
                     0.0,
