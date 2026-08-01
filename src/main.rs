@@ -60,7 +60,7 @@ fn main() {
         println!("aviso: no encontre assets/perseguidor.png, el enemigo va invisible en 3D");
     }
 
-    let mut texturas: Vec<Option<Texture2D>> = Vec::new();
+   let mut texturas: Vec<Option<Texture2D>> = Vec::new();
     for p in ["assets/texturas/concreto.png", "assets/texturas/azulejo.png", "assets/texturas/metal.png"] {
         let t = rl.load_texture(&thread, p).ok();
         if t.is_none() {
@@ -68,6 +68,13 @@ fn main() {
         }
         texturas.push(t);
     }
+
+    let tex_piso = rl.load_texture(&thread, "assets/texturas/alfombra.png").ok();
+    if tex_piso.is_none() {
+        println!("aviso: no encontre assets/texturas/alfombra.png");
+    }
+
+    let tex_techo = rl.load_texture(&thread, "assets/texturas/concreto.png").ok();
 
     let mut escena = Escena::Bienvenida;
     let mut est = Estado::nuevo(MAPAS[0]);
@@ -151,7 +158,7 @@ fn main() {
                 dh.clear_background(BG);
 
                 if est.modo3d {
-                   let zbuffer = render_3d(&mut dh, &est, &texturas, usar_tex);
+                  let zbuffer = render_3d(&mut dh, &est, &texturas, tex_piso.as_ref(), tex_techo.as_ref(), usar_tex);
                     if let Some(tex) = &perseguidor_tex {
                         render_sprite(&mut dh, &est, tex, &zbuffer);
                     }
