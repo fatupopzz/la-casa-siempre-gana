@@ -32,6 +32,7 @@ pub const ENEMIGO: Color = Color { r: 120, g: 220, b: 90, a: 255 };
 // -------------------------------------------------- movimiento
 const VEL: f32 = 3.2;
 const VEL_GIRO: f32 = 2.4;
+const SENS_MOUSE: f32 = 0.003;
 
 // -------------------------------------------------- perseguidor
 const DIST_ALERTA: f32 = 4.0; // a partir de aqui la pantalla se pone fea
@@ -46,6 +47,7 @@ fn main() {
         .title("Maze Runner - raycaster")
         .build();
     rl.set_target_fps(60);
+    rl.disable_cursor();
 
     let juanjo = rl.load_texture(&thread, "assets/juanjo.png").ok();
     if juanjo.is_none() {
@@ -69,6 +71,9 @@ fn main() {
             if rl.is_key_down(KeyboardKey::KEY_D) || rl.is_key_down(KeyboardKey::KEY_RIGHT) {
                 est.a += VEL_GIRO * dt;
             }
+
+            let mouse_dx = rl.get_mouse_delta().x;
+            est.a += mouse_dx * SENS_MOUSE;
 
             let paso = VEL * dt;
             if rl.is_key_down(KeyboardKey::KEY_W) || rl.is_key_down(KeyboardKey::KEY_UP) {
