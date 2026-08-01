@@ -28,6 +28,8 @@ pub const RAYO_BORDE: Color = Color { r: 255, g: 110, b: 199, a: 220 };
 pub const CIELO: Color = Color { r: 22, g: 9, b: 40, a: 255 };
 pub const PISO: Color = Color { r: 38, g: 22, b: 58, a: 255 };
 pub const ENEMIGO: Color = Color { r: 120, g: 220, b: 90, a: 255 };
+pub const PARED2: Color = Color { r: 78, g: 157, b: 157, a: 255 };
+pub const PARED3: Color = Color { r: 180, g: 110, b: 60, a: 255 };
 
 // -------------------------------------------------- movimiento
 const VEL: f32 = 3.2;
@@ -38,7 +40,7 @@ const SENS_MOUSE: f32 = 0.003;
 const DIST_ALERTA: f32 = 4.0;
 
 // -------------------------------------------------- pisos
-const MAPAS: [&str; 3] = ["maze.txt", "maze.txt", "maze.txt"]; // TODO: mapas reales
+const MAPAS: [&str; 3] = ["mapas/piso1.txt", "mapas/piso2.txt", "mapas/piso3.txt"];
 
 fn main() {
     let (mut rl, thread) = raylib::init()
@@ -55,6 +57,15 @@ fn main() {
     let perseguidor_tex = rl.load_texture(&thread, "assets/perseguidor.png").ok();
     if perseguidor_tex.is_none() {
         println!("aviso: no encontre assets/perseguidor.png, el enemigo va invisible en 3D");
+    }
+
+    let mut texturas: Vec<Option<Texture2D>> = Vec::new();
+    for p in ["assets/texturas/concreto.png", "assets/texturas/azulejo.png", "assets/texturas/metal.png"] {
+        let t = rl.load_texture(&thread, p).ok();
+        if t.is_none() {
+            println!("aviso: no encontre {}", p);
+        }
+        texturas.push(t);
     }
 
     let mut escena = Escena::Bienvenida;
@@ -139,7 +150,7 @@ fn main() {
                 dh.clear_background(BG);
 
                 if est.modo3d {
-                    let zbuffer = render_3d(&mut dh, &est, juanjo.as_ref(), usar_tex);
+                   let zbuffer = render_3d(&mut dh, &est, &texturas, usar_tex);
                     if let Some(tex) = &perseguidor_tex {
                         render_sprite(&mut dh, &est, tex, &zbuffer);
                     }

@@ -34,7 +34,7 @@ pub fn buscar(grid: &[Vec<char>], objetivo: char) -> Option<(usize, usize)> {
 }
 
 pub fn es_pared(ch: char) -> bool {
-    matches!(ch, '+' | '-' | '|')
+    matches!(ch, '+' | '-' | '|' | '#' | 'W' | 'X')
 }
 
 pub fn char_en(grid: &[Vec<char>], x: f32, y: f32) -> char {

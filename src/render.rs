@@ -6,7 +6,7 @@ use crate::raycast::{lanzar, MAX_DIST};
 use crate::mapa::es_pared;
 use crate::{
     ANCHO, VIEW_H,
-    PARED, PARED_BORDE, CAMINO, INICIO, META, JUGADOR,
+    PARED, PARED2, PARED3, PARED_BORDE, CAMINO, INICIO, META, JUGADOR,
     RAYO, RAYO_BORDE, CIELO, PISO, ENEMIGO,
 };
 
@@ -16,10 +16,21 @@ const NUM_RAYOS_2D: usize = 80;
 
 fn color_de(ch: char) -> Color {
     match ch {
-        '+' | '-' | '|' => PARED,
+        '#' | '+' | '-' | '|' => PARED,
+        'W' => PARED2,
+        'X' => PARED3,
         'A' => INICIO,
         'B' => META,
         _ => CAMINO,
+    }
+}
+
+fn indice_textura(ch: char) -> usize {
+    match ch {
+        '#' | '+' | '-' | '|' => 0,
+        'W' => 1,
+        'X' => 2,
+        _ => 0,
     }
 }
 
@@ -87,7 +98,7 @@ pub fn render_2d(dh: &mut RaylibDrawHandle<'_>, est: &Estado) {
 pub fn render_3d(
     dh: &mut RaylibDrawHandle<'_>,
     est: &Estado,
-    juanjo: Option<&Texture2D>,
+    texturas: &[Option<Texture2D>],
     usar_tex: bool,
 ) -> Vec<f32> {
     let hh = VIEW_H as f32 / 2.0;
@@ -115,29 +126,31 @@ pub fn render_3d(
         }
         let x = i as i32 * ANCHO_ESTACA;
 
-        match (juanjo, usar_tex) {
+        let idx = indice_textura(imp.ch);
+        let tex_opt = texturas.get(idx).and_then(|t| t.as_ref());
+
+        match (tex_opt, usar_tex) {
             (Some(tex), true) => {
                 let tw = tex.width as f32;
                 let th = tex.height as f32;
                 let sx = (imp.tx * tw).clamp(0.0, tw - 1.0);
+                let v = (255.0 * f) as u8;
                 dh.draw_texture_pro(
                     tex,
                     Rectangle::new(sx, 0.0, 1.0, th),
                     Rectangle::new(x as f32, stake_top, ANCHO_ESTACA as f32, stake_height),
                     Vector2::zero(),
                     0.0,
-                    Color {
-                        r: (250.0 * f) as u8,
-                        g: (228.0 * f) as u8,
-                        b: (255.0 * f) as u8,
-                        a: 255,
-                    },
+                    Color { r: v, g: v, b: v, a: 255 },
                 );
             }
             _ => {
                 let base = match imp.ch {
                     '|' => Color { r: 178, g: 102, b: 235, a: 255 },
                     '-' => Color { r: 132, g: 62, b: 190, a: 255 },
+                    'W' => PARED2,
+                    'X' => PARED3,
+                    'B' => META,
                     _ => PARED,
                 };
                 let top = stake_top.max(0.0) as i32;
@@ -149,6 +162,7 @@ pub fn render_3d(
 
     zbuffer
 }
+
 
 pub fn render_sprite(dh: &mut RaylibDrawHandle<'_>, est: &Estado, tex: &Texture2D, zbuffer: &[f32]) {
     let dx = est.ex - est.x;
@@ -216,16 +230,13 @@ pub fn render_minimapa(dh: &mut RaylibDrawHandle<'_>, est: &Estado) {
     let (ox, oy) = (12, 12);
     let w = est.cols() * bs;
     let h = est.filas() * bs;
+    
 
     dh.draw_rectangle(ox - 6, oy - 6, w + 12, h + 12, Color { r: 12, g: 5, b: 24, a: 200 });
 
     for (r, fila) in est.grid.iter().enumerate() {
         for (c, ch) in fila.iter().enumerate() {
-            let col = match ch {
-                '+' | '-' | '|' => PARED,
-                'B' => META,
-                _ => CAMINO,
-            };
+            let col = color_de(*ch);
             dh.draw_rectangle(ox + c as i32 * bs, oy + r as i32 * bs, bs, bs, col);
         }
     }

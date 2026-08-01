@@ -1,0 +1,13 @@
+XXXXXXXXXXXXX
+XA    X     X
+X ### X # # X
+X   # W # # X
+X # # W # # X
+X #   W     X
+X # WWW ### X
+X #       # X
+X ##### # # X
+X     # #   X
+X ### # ### X
+X         #BX
+XXXXXXXXXXXXX
