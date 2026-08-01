@@ -1,0 +1,10 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/fatu/Documents/Progra/graficas/maze-runner/target/release/build/raylib-sys-395cfef0b50fa6c5/out/build/cmake_install.cmake",
+		"/Users/fatu/Documents/Progra/graficas/maze-runner/target/release/build/raylib-sys-395cfef0b50fa6c5/out/build/raylib/cmake_install.cmake",
+		"/Users/fatu/Documents/Progra/graficas/maze-runner/target/release/build/raylib-sys-395cfef0b50fa6c5/out/build/raylib/external/glfw/cmake_install.cmake",
+		"/Users/fatu/Documents/Progra/graficas/maze-runner/target/release/build/raylib-sys-395cfef0b50fa6c5/out/build/raylib/external/glfw/src/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
