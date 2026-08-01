@@ -14,22 +14,23 @@ pub const ALTO: i32 = 640;
 pub const HUD_H: i32 = 40;
 pub const VIEW_H: i32 = ALTO - HUD_H;
 
+
 // -------------------------------------------------- paleta
-pub const BG: Color = Color { r: 26, g: 11, b: 46, a: 255 };
-pub const PARED: Color = Color { r: 157, g: 78, b: 221, a: 255 };
-pub const PARED_BORDE: Color = Color { r: 199, g: 125, b: 255, a: 255 };
-pub const CAMINO: Color = Color { r: 42, g: 27, b: 61, a: 255 };
-pub const INICIO: Color = Color { r: 116, g: 240, b: 200, a: 255 };
-pub const META: Color = Color { r: 255, g: 110, b: 199, a: 255 };
-pub const JUGADOR: Color = Color { r: 255, g: 224, b: 247, a: 255 };
-pub const TEXTO: Color = Color { r: 224, g: 204, b: 255, a: 255 };
-pub const RAYO: Color = Color { r: 255, g: 235, b: 250, a: 110 };
-pub const RAYO_BORDE: Color = Color { r: 255, g: 110, b: 199, a: 220 };
-pub const CIELO: Color = Color { r: 22, g: 9, b: 40, a: 255 };
-pub const PISO: Color = Color { r: 38, g: 22, b: 58, a: 255 };
+pub const BG: Color = Color { r: 18, g: 8, b: 8, a: 255 };
+pub const PARED: Color = Color { r: 74, g: 64, b: 57, a: 255 };
+pub const PARED_BORDE: Color = Color { r: 90, g: 74, b: 64, a: 255 };
+pub const PARED2: Color = Color { r: 72, g: 85, b: 80, a: 255 };
+pub const PARED3: Color = Color { r: 90, g: 56, b: 34, a: 255 };
+pub const CAMINO: Color = Color { r: 30, g: 20, b: 18, a: 255 };
+pub const INICIO: Color = Color { r: 136, g: 68, b: 34, a: 255 };
+pub const META: Color = Color { r: 204, g: 34, b: 34, a: 255 };
+pub const JUGADOR: Color = Color { r: 255, g: 207, b: 188, a: 255 };
+pub const TEXTO: Color = Color { r: 196, g: 168, b: 130, a: 255 };
+pub const RAYO: Color = Color { r: 255, g: 107, b: 80, a: 64 };
+pub const RAYO_BORDE: Color = Color { r: 204, g: 34, b: 34, a: 204 };
+pub const CIELO: Color = Color { r: 14, g: 6, b: 6, a: 255 };
+pub const PISO: Color = Color { r: 58, g: 31, b: 34, a: 255 };
 pub const ENEMIGO: Color = Color { r: 120, g: 220, b: 90, a: 255 };
-pub const PARED2: Color = Color { r: 78, g: 157, b: 157, a: 255 };
-pub const PARED3: Color = Color { r: 180, g: 110, b: 60, a: 255 };
 
 // -------------------------------------------------- movimiento
 const VEL: f32 = 3.2;
