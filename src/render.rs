@@ -373,6 +373,73 @@ pub fn render_minimapa(dh: &mut RaylibDrawHandle<'_>, est: &Estado) {
     dh.draw_circle_v(Vector2::new(px, py), (bs as f32 * 0.45).max(2.0), JUGADOR);
 }
 
+
+/// sombra negra sin textura — silueta alta y angosta con bordes difusos
+pub fn render_sombra(
+    dh: &mut RaylibDrawHandle<'_>,
+    est: &Estado,
+    zbuffer: &[f32],
+) {
+    let dx = est.ex - est.x;
+    let dy = est.ey - est.y;
+    let dist = (dx * dx + dy * dy).sqrt();
+    if dist < 0.05 { return; }
+
+    let mut rel = dy.atan2(dx) - est.a;
+    while rel > std::f32::consts::PI  { rel -= std::f32::consts::TAU; }
+    while rel < -std::f32::consts::PI { rel += std::f32::consts::TAU; }
+    if rel.abs() > FOV { return; }
+
+    let hh = VIEW_H as f32 / 2.0;
+    let tam_h = (VIEW_H as f32 / dist).min(VIEW_H as f32 * 3.0);
+    let tam_w = tam_h * 0.45; // mas angosto que alto
+    let cx = ANCHO as f32 / 2.0 + (rel / (FOV / 2.0)) * (ANCHO as f32 / 2.0);
+    let izq = cx - tam_w / 2.0;
+    let top = hh - tam_h / 2.0;
+
+    let dist_z = dist * rel.cos();
+
+    let spr_col_t = ((cx / ANCHO as f32) - 0.5).abs() * 2.0;
+    let ff = fog_factor(dist, spr_col_t);
+
+    // pulso sutil — "respira"
+    let pulso = 0.85 + 0.15 * (est.anim_t * 3.0).sin();
+
+    let paso = ANCHO_ESTACA as f32;
+    let n_cols = (tam_w / paso).ceil() as i32;
+    let tira = 4i32; // alto de cada tira para el fade vertical
+
+    for i in 0..n_cols {
+        let x = izq + i as f32 * paso;
+        if x < 0.0 || x >= ANCHO as f32 { continue; }
+        let col = (x as i32 / ANCHO_ESTACA) as usize;
+        if col >= zbuffer.len() || zbuffer[col] <= dist_z { continue; }
+
+        // fade horizontal: opaco al centro, transparente en bordes
+        let tx = ((i as f32 + 0.5) / n_cols as f32 - 0.5).abs() * 2.0;
+        let edge_x = (1.0 - tx * tx).clamp(0.0, 1.0);
+
+        // tiras verticales para fade en el tope
+        let mut y = top as i32;
+        let bottom = (top + tam_h) as i32;
+        while y < bottom {
+            let h = tira.min(bottom - y);
+            let ty = ((y as f32 - top) / tam_h).clamp(0.0, 1.0);
+            // el 20% superior se desvanece
+            let edge_y = if ty < 0.2 { ty / 0.2 } else { 1.0 };
+            let alpha = (edge_x * edge_y * ff * pulso * 230.0) as u8;
+
+            if y >= 0 && y < VIEW_H {
+                dh.draw_rectangle(
+                    x as i32, y, paso as i32, h,
+                    Color { r: 0, g: 0, b: 0, a: alpha },
+                );
+            }
+            y += tira;
+        }
+    }
+}
+
 /// vineta: oscurece arriba y abajo
 pub fn render_vigneta(dh: &mut RaylibDrawHandle<'_>) {
     let bandas = 20i32;

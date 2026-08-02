@@ -5,7 +5,7 @@ mod estado;
 mod render;
 mod juego;
 use estado::Estado;
-use render::{render_2d, render_3d, render_sprite, render_minimapa};
+use render::{render_2d, render_3d, render_sprite, render_minimapa, render_sombra};
 use juego::Escena;
 
 // -------------------------------------------------- ventana
@@ -110,12 +110,15 @@ fn main() {
             // ============================================ JUGANDO
             Escena::Jugando => {
                 // input
-                if rl.is_key_down(KeyboardKey::KEY_A) || rl.is_key_down(KeyboardKey::KEY_LEFT) {
+                if rl.is_key_down(KeyboardKey::KEY_LEFT) {
                     est.a -= VEL_GIRO * dt;
                 }
-                if rl.is_key_down(KeyboardKey::KEY_D) || rl.is_key_down(KeyboardKey::KEY_RIGHT) {
+
+                if rl.is_key_down(KeyboardKey::KEY_RIGHT) {
                     est.a += VEL_GIRO * dt;
                 }
+
+
                 let mouse_dx = rl.get_mouse_delta().x;
                 est.a += mouse_dx * SENS_MOUSE;
 
@@ -131,6 +134,14 @@ fn main() {
                     est.avanzar(-lado.cos() * paso, -lado.sin() * paso);
                 }
                 if rl.is_key_down(KeyboardKey::KEY_E) {
+                    est.avanzar(lado.cos() * paso, lado.sin() * paso);
+                }
+
+                if rl.is_key_down(KeyboardKey::KEY_Q) || rl.is_key_down(KeyboardKey::KEY_A) {
+                    est.avanzar(-lado.cos() * paso, -lado.sin() * paso);
+                }
+
+                if rl.is_key_down(KeyboardKey::KEY_E) || rl.is_key_down(KeyboardKey::KEY_D) {
                     est.avanzar(lado.cos() * paso, lado.sin() * paso);
                 }
 
@@ -159,21 +170,40 @@ fn main() {
 
                 if est.modo3d {
                   let zbuffer = render_3d(&mut dh, &est, &texturas, tex_piso.as_ref(), tex_techo.as_ref(), usar_tex);
-                    if let Some(tex) = &perseguidor_tex {
-                        render_sprite(&mut dh, &est, tex, &zbuffer);
-                    }
+                   render::render_sombra(&mut dh, &est, &zbuffer);
                     render_minimapa(&mut dh, &est);
                 } else {
                     render_2d(&mut dh, &est);
                 }
 
                 if dist_e < DIST_ALERTA {
-                    let intensidad = (1.0 - dist_e / DIST_ALERTA).clamp(0.0, 1.0);
-                    dh.draw_rectangle(0, 0, ANCHO, VIEW_H,
-                        Color { r: 60, g: 140, b: 40, a: (intensidad * 70.0) as u8 });
-                }
+    let t = (1.0 - dist_e / DIST_ALERTA).clamp(0.0, 1.0);
+    let radio = (1.0 - t) * 0.5;
+    for band in 0..20 {
+        let bt = band as f32 / 20.0;
+        if bt > radio {
+            let ba = ((bt - radio) / (1.0 - radio)).clamp(0.0, 1.0);
+            let a = (ba * ba * 255.0) as u8;
+            let h = (VIEW_H as f32 * 0.05) as i32 + 1;
+            dh.draw_rectangle(0, band * h, ANCHO, h, Color { r: 0, g: 0, b: 0, a });
+            dh.draw_rectangle(0, VIEW_H - (band + 1) * h, ANCHO, h, Color { r: 0, g: 0, b: 0, a });
+            let w = (ANCHO as f32 * 0.05) as i32 + 1;
+            dh.draw_rectangle(band * w, 0, w, VIEW_H, Color { r: 0, g: 0, b: 0, a });
+            dh.draw_rectangle(ANCHO - (band + 1) * w, 0, w, VIEW_H, Color { r: 0, g: 0, b: 0, a });
+        }
+    } // <-- cierra el for
 
-                dh.draw_rectangle(0, VIEW_H, ANCHO, HUD_H, Color { r: 16, g: 7, b: 30, a: 255 });
+    // esto va AFUERA del for
+    let black_a = (t * t * t * 220.0) as u8;
+    dh.draw_rectangle(0, 0, ANCHO, VIEW_H, Color { r: 0, g: 0, b: 0, a: black_a });
+
+    if t > 0.6 {
+        let flicker = ((est.anim_t * 12.0).sin() * (est.anim_t * 37.0).sin()).abs();
+        let fa = (flicker * t * 180.0) as u8;
+        dh.draw_rectangle(0, 0, ANCHO, VIEW_H, Color { r: 0, g: 0, b: 0, a: fa });
+    }
+} // <-- cierra el if
+dh.draw_rectangle(0, VIEW_H, ANCHO, HUD_H, Color { r: 16, g: 7, b: 30, a: 255 });
                 let modo = if est.modo3d { "3D" } else { "2D" };
                 dh.draw_text(
                     &format!("[{}]  M vista  T textura  WASD mover  Q/E de lado", modo),
@@ -186,6 +216,12 @@ fn main() {
                     else { Color { r: 140, g: 110, b: 180, a: 255 } },
                 );
             }
+
+
+
+    
+
+
 
             // ============================================ VICTORIA
             Escena::Victoria => {

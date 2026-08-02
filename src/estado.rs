@@ -2,7 +2,7 @@
 
 use crate::mapa::{cargar, buscar, es_pared, char_en, libre, campo_desde};
 
-const VEL_ENEMIGO: f32 = 2.1;
+const VEL_ENEMIGO: f32 = 3.8;
 const PASOS_SPAWN: i32 = 30;
 const RECALC: f32 = 0.25;
 const DIST_ATRAPA: f32 = 0.5;

@@ -1,7 +1,0 @@
-/Users/fatu/Documents/Progra/graficas/maze-runner/target/debug/build/raylib-sys-441b1d69b1627d6e/out/lib/libraylib.a
-/Users/fatu/Documents/Progra/graficas/maze-runner/target/debug/build/raylib-sys-441b1d69b1627d6e/out/include/raylib.h
-/Users/fatu/Documents/Progra/graficas/maze-runner/target/debug/build/raylib-sys-441b1d69b1627d6e/out/include/rlgl.h
-/Users/fatu/Documents/Progra/graficas/maze-runner/target/debug/build/raylib-sys-441b1d69b1627d6e/out/include/raymath.h
-/Users/fatu/Documents/Progra/graficas/maze-runner/target/debug/build/raylib-sys-441b1d69b1627d6e/out/lib/pkgconfig/raylib.pc
-/Users/fatu/Documents/Progra/graficas/maze-runner/target/debug/build/raylib-sys-441b1d69b1627d6e/out/lib/cmake/raylib/raylib-config-version.cmake
-/Users/fatu/Documents/Progra/graficas/maze-runner/target/debug/build/raylib-sys-441b1d69b1627d6e/out/lib/cmake/raylib/raylib-config.cmake
