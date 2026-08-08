@@ -2,7 +2,6 @@
 
 use crate::mapa::{cargar, buscar, es_pared, char_en, libre, campo_desde};
 
-const VEL_ENEMIGO: f32 = 3.8;
 const PASOS_SPAWN: i32 = 30;
 const RECALC: f32 = 0.25;
 const DIST_ATRAPA: f32 = 0.5;
@@ -20,10 +19,15 @@ pub struct Estado {
     pub t_recalc: f32,
     pub atrapado: bool,
     pub anim_t: f32,
+    pub persiguiendo: bool,
+    pub vel_enemigo: f32,
 }
 
 impl Estado {
-    pub fn nuevo(path: &str) -> Self {
+    /// la velocidad de la sombra la manda el ConfigPiso del piso que se entra:
+    /// va como parametro para que no exista un default global que se pueda
+    /// quedar viejo. Siempre es mayor que la del jugador.
+    pub fn nuevo(path: &str, vel_enemigo: f32) -> Self {
         let grid = cargar(path);
         let (pr, pc) = buscar(&grid, 'A').expect("el maze.txt no tiene 'A'");
         let cols = grid[0].len();
@@ -58,6 +62,8 @@ impl Estado {
             t_recalc: 0.0,
             atrapado: false,
             anim_t: 0.0,
+            persiguiendo: false,
+            vel_enemigo,
         }
     }
 
@@ -87,6 +93,8 @@ impl Estado {
 
     pub fn perseguir(&mut self, dt: f32) {
         self.anim_t += dt;
+        self.t_recalc -= dt;
+        if !self.persiguiendo { return; }
         if self.t_recalc <= 0.0 {
             let (pr, pc) = (self.y as usize, self.x as usize);
             self.campo = campo_desde(&self.grid, pr, pc);
@@ -126,7 +134,7 @@ impl Estado {
         let (dx, dy) = (objetivo.0 - self.ex, objetivo.1 - self.ey);
         let len = (dx * dx + dy * dy).sqrt();
         if len > 0.001 {
-            let paso = VEL_ENEMIGO * dt;
+            let paso = self.vel_enemigo * dt;
             self.ex += dx / len * paso;
             self.ey += dy / len * paso;
         }

@@ -1,6 +1,6 @@
 XXXXXXXXXXXXX
 XA    X     X
-X ### X # # X
+X #M# X # # X
 X   # W # # X
 X # # W # # X
 X #   W     X

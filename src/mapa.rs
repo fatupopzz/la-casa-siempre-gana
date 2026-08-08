@@ -34,7 +34,7 @@ pub fn buscar(grid: &[Vec<char>], objetivo: char) -> Option<(usize, usize)> {
 }
 
 pub fn es_pared(ch: char) -> bool {
-    matches!(ch, '+' | '-' | '|' | '#' | 'W' | 'X')
+    matches!(ch, '+' | '-' | '|' | '#' | 'W' | 'X' | 'M')
 }
 
 pub fn char_en(grid: &[Vec<char>], x: f32, y: f32) -> char {
@@ -86,4 +86,19 @@ pub fn campo_desde(grid: &[Vec<char>], r0: usize, c0: usize) -> Vec<i32> {
         }
     }
     d
+}
+
+pub fn hay_adyacente(grid: &[Vec<char>], x: f32, y: f32, objetivo: char) -> bool {
+    let c = x as usize;
+    let r = y as usize;
+    for (dr, dc) in [(-1i32, 0i32), (1, 0), (0, -1), (0, 1)] {
+        let nr = r as i32 + dr;
+        let nc = c as i32 + dc;
+        if nr >= 0 && nc >= 0 && (nr as usize) < grid.len() && (nc as usize) < grid[0].len() {
+            if grid[nr as usize][nc as usize] == objetivo {
+                return true;
+            }
+        }
+    }
+    false
 }

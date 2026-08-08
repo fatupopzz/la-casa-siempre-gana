@@ -27,6 +27,7 @@ fn color_de(ch: char) -> Color {
         '#' | '+' | '-' | '|' => PARED,
         'W' => PARED2,
         'X' => PARED3,
+        'M' => Color { r: 255, g: 110, b: 199, a: 255 },
         'A' => INICIO,
         'B' => META,
         _ => CAMINO,
@@ -37,7 +38,7 @@ fn indice_textura(ch: char) -> usize {
     match ch {
         '#' | '+' | '-' | '|' => 0,
         'W' => 1,
-        'X' => 2,
+        'X' | 'M' => 2,
         _ => 0,
     }
 }
@@ -234,14 +235,19 @@ pub fn render_3d(
                 let tw = tex.width as f32;
                 let th = tex.height as f32;
                 let sx = (imp.tx * tw).clamp(0.0, tw - 1.0);
-                let v = (255.0 * f_face) as u8;
+                let (tr, tg, tb) = if imp.ch == 'M' {
+                    ((255.0 * f_face) as u8, (80.0 * f_face) as u8, (180.0 * f_face) as u8)
+                } else {
+                    let v = (255.0 * f_face) as u8;
+                    (v, v, v)
+                };                
                 dh.draw_texture_pro(
                     tex,
                     Rectangle::new(sx, 0.0, 1.0, th),
                     Rectangle::new(x as f32, stake_top, ANCHO_ESTACA as f32, stake_height),
                     Vector2::zero(),
                     0.0,
-                    Color { r: v, g: v, b: v, a: 255 },
+                    Color { r: tr, g: tg, b: tb, a: 255 },
                 );
                 // overlay de niebla
                 let fog_a = ((1.0 - fog_factor(d, col_t)) * 255.0) as u8;
@@ -259,6 +265,7 @@ pub fn render_3d(
                     'W' => PARED2,
                     'X' => PARED3,
                     'B' => META,
+                    'M' => Color { r: 255, g: 110, b: 199, a: 255 },
                     _ => PARED,
                 };
                 let top = stake_top.max(0.0) as i32;
@@ -358,9 +365,12 @@ pub fn render_minimapa(dh: &mut RaylibDrawHandle<'_>, est: &Estado) {
         }
     }
 
-    let ex = ox as f32 + est.ex * bs as f32;
-    let ey = oy as f32 + est.ey * bs as f32;
-    dh.draw_circle_v(Vector2::new(ex, ey), (bs as f32 * 0.5).max(2.0), ENEMIGO);
+    // el punto del enemigo solo cuando de verdad anda suelto
+    if est.persiguiendo {
+        let ex = ox as f32 + est.ex * bs as f32;
+        let ey = oy as f32 + est.ey * bs as f32;
+        dh.draw_circle_v(Vector2::new(ex, ey), (bs as f32 * 0.5).max(2.0), ENEMIGO);
+    }
 
     let px = ox as f32 + est.x * bs as f32;
     let py = oy as f32 + est.y * bs as f32;
