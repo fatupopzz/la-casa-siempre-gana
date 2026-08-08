@@ -1,13 +1,8 @@
 /target
 *.swp
 *.swo
-.DS_Store
-.claude/
-assets/audio/*.mp3
-assets/audio/*.ogg
 **/.DS_Store
-*.mp3
-*.ogg
-*.wav
-*.flac
-*.m4a
+.claude/
+
+# la musica con copyright no va al repo, el resto del audio si
+assets/audio/musica_casino.mp3
