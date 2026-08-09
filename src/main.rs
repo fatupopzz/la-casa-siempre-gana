@@ -6,7 +6,9 @@ mod estado;
 mod render;
 mod juego;
 mod maquina;
-use maquina::{AnimRodillos, Maquina, Simbolo};
+mod audio;
+use audio::Audio;
+use maquina::{AnimRodillos, FaseRodillos, Maquina, Palanca, Simbolo, N_SIMBOLOS};
 use mapa::hay_adyacente;
 use estado::Estado;
 use render::{render_2d, render_3d, render_minimapa};
@@ -62,7 +64,7 @@ const PISOS: [ConfigPiso; 3] = [
     ConfigPiso {
         nombre: "PISO 1",
         mapa: "mapas/piso1.txt",
-        cuota: 100,
+        cuota: 65,
         giros: 20,
         vel_enemigo: 3.8,
         dist_alerta: 6.0,
@@ -70,7 +72,7 @@ const PISOS: [ConfigPiso; 3] = [
     ConfigPiso {
         nombre: "PISO 2",
         mapa: "mapas/piso2.txt",
-        cuota: 170,
+        cuota: 70,
         giros: 16,
         vel_enemigo: 4.1,
         dist_alerta: 5.0,
@@ -78,42 +80,59 @@ const PISOS: [ConfigPiso; 3] = [
     ConfigPiso {
         nombre: "PISO 3",
         mapa: "mapas/piso3.txt",
-        cuota: 250,
+        cuota: 70,
         giros: 12,
         vel_enemigo: 4.4,
         dist_alerta: 4.0,
     },
 ];
 
+// Ventaja por meterse al laberinto por decision propia en vez de que te tiren
+// adentro por quedarte sin giros. Sin esto elegir correr no cambiaba nada y era
+// siempre la peor jugada: mismo laberinto, pero habiendo gastado los giros.
+// Sigue sin poder escaparsele corriendo, la sombra queda arriba de VEL (3.2).
+const VENTAJA_RETRASO: f32 = 3.0; // segundos antes de que la sombra salga
+const VENTAJA_VEL: f32 = 0.3;     // cuanto mas lenta va la sombra
+
 /// arranca el laberinto de un piso: su mapa, la sombra suelta y a la velocidad
 /// que le toca. Todo sale del ConfigPiso, no hay consts de por medio.
-fn entrar_al_laberinto(cfg: &ConfigPiso) -> Estado {
-    let mut est = Estado::nuevo(cfg.mapa, cfg.vel_enemigo);
+///
+/// `voluntario` = el jugador eligio salir en vez de quemar los giros. Se lleva
+/// unos segundos antes de que la sombra salga y la sombra va algo mas lenta.
+fn entrar_al_laberinto(cfg: &ConfigPiso, voluntario: bool) -> Estado {
+    let vel = if voluntario {
+        cfg.vel_enemigo - VENTAJA_VEL
+    } else {
+        cfg.vel_enemigo
+    };
+    let mut est = Estado::nuevo(cfg.mapa, vel);
     est.modo3d = true;
-    est.persiguiendo = true;
+    if voluntario {
+        // todavia no te vieron salir: la sombra aparece despues
+        est.persiguiendo = false;
+        est.t_espera = VENTAJA_RETRASO;
+    } else {
+        est.persiguiendo = true;
+    }
     est
 }
 
-/// pasa al piso siguiente, o Victoria si era el ultimo
-fn siguiente_ronda(
-    piso: &mut usize,
-    maq: &mut Maquina,
-    anim: &mut AnimRodillos,
-    en_laberinto: &mut bool,
-) -> Escena {
-    if *piso + 1 >= PISOS.len() {
-        return Escena::Victoria;
+/// cuantos rodillos ya frenaron, leyendo solo la fase. Vive aca y no en
+/// maquina.rs para no tocar la logica de la animacion: main solo necesita
+/// saber cuando suena el golpe de un rodillo.
+fn rodillos_parados(f: FaseRodillos) -> usize {
+    match f {
+        FaseRodillos::Girando(_) => 0,
+        FaseRodillos::Parando(i, _) => i + 1,
+        _ => 3,
     }
-    *piso += 1;
-    let cfg = PISOS[*piso];
-    *maq = Maquina::nueva(cfg.cuota, cfg.giros);
-    *anim = AnimRodillos::nueva();
-    *en_laberinto = false;
-    Escena::Maquina
 }
 
 // -------------------------------------------------- fundido entre escenas
 const T_FUNDIDO: f32 = 0.25; // dura lo mismo cerrar que abrir
+/// Al fallar la cuota la pantalla se queda en negro y en silencio antes de
+/// tirarte al laberinto. Ese vacio es el efecto; no lleva sonido encima.
+const T_PAUSA_FALLO: f32 = 1.0;
 
 /// Fundido a negro para entrar y salir de la maquina: el corte de 3D a 2D a
 /// pantalla completa se siente brusco sin esto. Primero cierra a negro, ahi
@@ -122,19 +141,28 @@ const T_FUNDIDO: f32 = 0.25; // dura lo mismo cerrar que abrir
 struct Fundido {
     t: f32,
     destino: Option<Escena>,
+    /// cuanto se queda en negro antes de cambiar de escena. Se usa al fallar la
+    /// cuota: ese silencio en negro es el efecto, no hay que taparlo con nada.
+    t_pausa: f32,
 }
 
 impl Fundido {
     fn nuevo() -> Self {
-        Fundido { t: 0.0, destino: None }
+        Fundido { t: 0.0, destino: None, t_pausa: 0.0 }
     }
 
     /// pide el cambio de escena. Si ya hay uno en curso no lo pisa. El reloj
     /// NO se reinicia: si venia abriendo, cierra desde donde estaba el velo en
     /// vez de saltar a transparente y volver a oscurecer.
     fn ir_a(&mut self, e: Escena) {
+        self.ir_a_con_pausa(e, 0.0);
+    }
+
+    /// igual que ir_a pero aguantando `pausa` segundos en negro antes del cambio
+    fn ir_a_con_pausa(&mut self, e: Escena, pausa: f32) {
         if self.destino.is_none() {
             self.destino = Some(e);
+            self.t_pausa = pausa;
         }
     }
 
@@ -150,7 +178,12 @@ impl Fundido {
             self.t += dt;
             if self.t >= T_FUNDIDO {
                 self.t = T_FUNDIDO; // desde aca arranca la apertura
-                return self.destino.take();
+                if self.t_pausa > 0.0 {
+                    // se queda en negro y en silencio antes de cambiar
+                    self.t_pausa -= dt;
+                } else {
+                    return self.destino.take();
+                }
             }
         } else if self.t > 0.0 {
             self.t = (self.t - dt).max(0.0);
@@ -244,8 +277,9 @@ const ROMBO_GROSOR: f32 = 2.0;
 // el tejido se dibuja con mas alpha que antes justamente porque el fondo va a
 // ALFOMBRA_BRILLO: si no, al bajar el brillo la textura desaparecia
 const ROMBO_ALPHA: u8 = 50;
-// la alfombra va a un cuarto de brillo: es textura de fondo, no protagonista
-const ALFOMBRA_BRILLO: f32 = 0.25;
+// la alfombra se ve, pero sigue MUY por debajo del logo: a este brillo su
+// punto mas claro queda en (25,7,9) contra el (255,110,199) del rosa
+const ALFOMBRA_BRILLO: f32 = 0.55;
 
 // vineta y grano
 const VINETA_BIENVENIDA: (f32, f32) = (0.15, 225.0); // (alcance, alpha maximo)
@@ -275,9 +309,23 @@ const GABINETE_PX: f32 = 768.0;                // lado del png fuente
 const LADO_GABINETE: f32 = ALTO as f32 * 0.78; // lado que ocupa en pantalla
 // centros de las tres ventanas negras
 const CENTROS_SLOT: [f32; 3] = [0.2812, 0.5000, 0.7188];
-const CENTRO_Y_SLOT: f32 = 0.5195;
 const ANCHO_SLOT: f32 = 0.1875; // ancho de la ventana: el simbolo no puede pasarse
-const TAM_SIMBOLO: f32 = 0.20;  // tamano de fuente del simbolo, x lado del gabinete
+const Y_SLOT: f32 = 0.3672;     // tope de la ventana negra
+const ALTO_SLOT: f32 = 0.3047;  // alto de la ventana negra
+const TAM_SIMBOLO: f32 = 0.20;  // tamano de fuente del simbolo, solo para el fallback
+
+// tira de simbolos: 128x640, 5 celdas de 128x128, en el orden del enum Simbolo
+const RUTA_SIMBOLOS: &str = "assets/sprites/simbolos.png";
+const CELDA_SIMBOLO: f32 = 128.0;
+
+// palanca. Va normalizada sobre el gabinete, como los slots.
+const RUTA_PALANCA: &str = "assets/sprites/palanca.png";
+const PALANCA_PX: (f32, f32) = (72.0, 246.0);
+const PALANCA_X: f32 = 0.8906;
+const PALANCA_Y: f32 = 0.3047;
+const PALANCA_W: f32 = 0.0938;
+const PALANCA_H: f32 = 0.3203;
+const PALANCA_RECORRIDO: f32 = 0.0703; // cuanto baja, en fracciones del lado
 // marquesina: el panel cian de arriba viene vacio a proposito
 const MARQUESINA: [f32; 4] = [0.2422, 0.1406, 0.5156, 0.1016]; // x, y, w, h
 const TEXTO_MARQUESINA: &str = "LA CASA";
@@ -285,6 +333,7 @@ const TAM_MARQUESINA: f32 = 0.62; // fraccion del alto del panel
 const COLOR_MARQUESINA: Color = Color { r: 26, g: 20, b: 22, a: 255 }; // #1A1416
 // HUD de la escena: va afuera del gabinete, nunca encima del arte
 const MARGEN_HUD: i32 = 18;
+const T_CONTEO: f32 = 0.35; // cuanto tarda el contador en subir hasta el pago
 const Y_PAGOS: i32 = 210;
 const PAGOS: [&str; 6] = [
     "777   50",
@@ -517,10 +566,6 @@ fn main() {
     rl.set_target_fps(60);
     rl.disable_cursor();
 
-    let juanjo = rl.load_texture(&thread, "assets/juanjo.png").ok();
-    if juanjo.is_none() {
-        println!("aviso: no encontre assets/juanjo.png, van paredes de color plano");
-    }
     let perseguidor_tex = rl.load_texture(&thread, "assets/sprites/sombra_sheet .png").ok();
     if perseguidor_tex.is_none() {
         println!("aviso: no encontre assets/perseguidor.png, el enemigo va invisible en 3D");
@@ -564,6 +609,21 @@ fn main() {
         ),
     }
 
+    let simbolos_tex = rl.load_texture(&thread, RUTA_SIMBOLOS).ok();
+    match &simbolos_tex {
+        Some(tex) => tex.set_texture_filter(&thread, TextureFilter::TEXTURE_FILTER_POINT),
+        None => eprintln!(
+            "aviso: no encontre {}, los rodillos van con letras",
+            RUTA_SIMBOLOS
+        ),
+    }
+
+    let palanca_tex = rl.load_texture(&thread, RUTA_PALANCA).ok();
+    match &palanca_tex {
+        Some(tex) => tex.set_texture_filter(&thread, TextureFilter::TEXTURE_FILTER_POINT),
+        None => eprintln!("aviso: no encontre {}, va sin palanca", RUTA_PALANCA),
+    }
+
     let fondo_maquina = rl.load_texture(&thread, RUTA_FONDO_MAQUINA).ok();
     match &fondo_maquina {
         Some(tex) => tex.set_texture_filter(&thread, TextureFilter::TEXTURE_FILTER_POINT),
@@ -601,6 +661,18 @@ fn main() {
         Fuentes { grande: None, chica: None }
     };
 
+    // El dispositivo de audio se queda aca a proposito: Music y Sound le
+    // prestan referencia, asi que tiene que vivir tanto como el bucle. Si no
+    // abre, Audio::mudo() deja todo en None y el juego corre en silencio.
+    let dispositivo = RaylibAudio::init_audio_device().ok();
+    if dispositivo.is_none() {
+        eprintln!("aviso: no pude abrir el dispositivo de audio, el juego va en silencio");
+    }
+    let mut audio = match &dispositivo {
+        Some(d) => Audio::nuevo(d),
+        None => Audio::mudo(),
+    };
+
     let mut escena = Escena::Bienvenida;
     let mut est = Estado::nuevo(PISOS[0].mapa, PISOS[0].vel_enemigo);
     let mut usar_tex = true;
@@ -609,12 +681,20 @@ fn main() {
     let mut maq = Maquina::nueva(PISOS[0].cuota, PISOS[0].giros);
     let mut anim = AnimRodillos::nueva();
     let mut fundido = Fundido::nuevo();
+    let mut palanca = Palanca::nueva();
+    // El contador de creditos que se DIBUJA va aparte de maq.creditos, porque
+    // maq.girar() suma en el mismo frame del jalon: si el HUD leyera eso
+    // directo, cantaria el resultado antes de que paren los rodillos.
+    let mut cred_objetivo = 0;
+    let mut cred_vista = 0.0f32;
     // de donde se entro a la maquina: false = la del arranque, true = una pared M del laberinto
     let mut maquina_en_laberinto = false;
 
     while !rl.window_should_close() {
         let dt = rl.get_frame_time();
         let tiempo = rl.get_time() as f32; // reloj global para los efectos
+        // el stream de musica se rellena cada frame, si no se corta a los pocos segundos
+        audio.actualizar(dt);
         // el cambio de escena recien pasa cuando el velo llego a negro
         if let Some(e) = fundido.actualizar(dt) {
             escena = e;
@@ -622,6 +702,8 @@ fn main() {
         match escena {
             // ============================================ BIENVENIDA
             Escena::Bienvenida => {
+                audio.bienvenida();
+
                 // la seleccion mueve `piso`, que es el indice de PISOS: de ahi
                 // sale el mapa, la cuota, los giros y la sombra
                 let n_pisos = PISOS.len();
@@ -802,7 +884,39 @@ fn main() {
 
             // ============================================ MAQUINA
             Escena::Maquina => {
+                // durante el fundido de salida no se relanza: si no, la pausa en
+                // negro al fallar la cuota sonaria con la musica del casino
+                if !fundido.en_curso() {
+                    audio.maquina();
+                }
+
+                // se mira la fase antes y despues para saber si en este frame
+                // freno un rodillo o si recien apareceio el resultado
+                let fase_antes = anim.fase;
                 let termino_anim = anim.actualizar(dt);
+                if rodillos_parados(anim.fase) > rodillos_parados(fase_antes) {
+                    audio.rodillo_para();
+                }
+                if anim.mostrando_resultado()
+                    && !matches!(fase_antes, FaseRodillos::Resultado(_))
+                    && anim.gano_giro
+                {
+                    audio.pago();
+                }
+
+                // El contador se entera del pago recien cuando los rodillos
+                // revelan. Mientras giran se queda en lo que habia antes.
+                if !anim.activa() || anim.mostrando_resultado() {
+                    cred_objetivo = maq.creditos;
+                }
+                // y de ahi sube contando, no salta: el numero subiendo es lo que
+                // se lee como "ganaste", un salto seco no se nota
+                let objetivo = cred_objetivo as f32;
+                if (cred_vista - objetivo).abs() < 0.5 {
+                    cred_vista = objetivo;
+                } else {
+                    cred_vista += (objetivo - cred_vista) / T_CONTEO * dt;
+                }
 
                 // si la maquina esta adentro del laberinto, el sujeto sigue caminando
                 // mientras uno jala: cada giro cuesta tiempo real
@@ -815,17 +929,30 @@ fn main() {
                 }
 
                 // jalar la palanca: el RNG se resuelve aca, los rodillos lo revelan despues
-                if !anim.activa() && !fundido.en_curso() && !maq.termino
+                // Jalar: la palanca baja PRIMERO. La guarda suma !palanca.activa()
+                // porque durante la bajada la animacion todavia no arranco y sin
+                // eso se colaba un segundo jalon en esos 0.10s.
+                if !anim.activa() && !palanca.activa() && !fundido.en_curso() && !maq.termino
                     && rl.is_key_pressed(KeyboardKey::KEY_F) {
+                    palanca.jalar();
+                    audio.palanca(); // el clunk va aca, al apretar
+                }
+                // el giro se resuelve recien cuando la palanca toca el fondo
+                if palanca.actualizar(dt) && !maq.termino {
                     let antes = maq.creditos;
                     maq.girar();
                     anim.iniciar(maq.rodillos, maq.creditos - antes);
+                    // aca y en ningun otro lado: palanca.actualizar() devuelve
+                    // true un solo frame, el del arranque del giro
+                    audio.slot();
                 }
 
                 // salir por voluntad propia
-                if !anim.activa() && !fundido.en_curso() && rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
+                if !anim.activa() && !palanca.activa() && !fundido.en_curso()
+                    && rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
                     if !maquina_en_laberinto {
-                        est = entrar_al_laberinto(&PISOS[piso]);
+                        // se va por su cuenta: se lleva la ventaja
+                        est = entrar_al_laberinto(&PISOS[piso], true);
                     }
                     fundido.ir_a(Escena::Jugando);
                 }
@@ -833,15 +960,21 @@ fn main() {
                 // recien cuando la animacion termino de mostrar el resultado se decide
                 if termino_anim && maq.termino {
                     if maq.gano() {
-                        // pago la cuota: se salta el laberinto y pasa de ronda
-                        let destino = siguiente_ronda(&mut piso, &mut maq, &mut anim, &mut maquina_en_laberinto);
-                        fundido.ir_a(destino);
-                    } else if !maquina_en_laberinto {
-                        // se le acabaron los giros afuera: lo tiran al laberinto
-                        est = entrar_al_laberinto(&PISOS[piso]);
-                        fundido.ir_a(Escena::Jugando);
+                        // pego la cuota: la partida se cierra en verde
+                        fundido.ir_a(Escena::Exito);
+                    } else {
+                        // se le acabaron los giros sin llegar a la cuota
+                        audio.fallo();
+                        if !maquina_en_laberinto {
+                            // lo tiran adentro: sin ventaja, la sombra ya salio
+                            est = entrar_al_laberinto(&PISOS[piso], false);
+                            // corte seco de la musica y un rato en negro antes
+                            // del laberinto: se acabo la fiesta
+                            audio.silencio();
+                            fundido.ir_a_con_pausa(Escena::Jugando, T_PAUSA_FALLO);
+                        }
+                        // adentro del laberinto se queda hasta que salga con ENTER
                     }
-                    // adentro del laberinto se queda hasta que salga con ENTER
                 }
 
                 // ---------------------------------------- dibujo
@@ -881,8 +1014,24 @@ fn main() {
                 let gy = (ALTO as f32 - lado) / 2.0;
                 let hay_arte = gabinete.is_some();
 
-                // (centro x, centro y, ancho util) de cada ventana y tamano del simbolo
-                let (slots, tam_simbolo): ([(f32, f32, f32); 3], i32) = match &gabinete {
+                // La palanca va ANTES del gabinete a proposito: asi la base
+                // metalica le tapa la varilla cuando baja y se ve como que se
+                // mete adentro. Dibujada despues quedaria flotando encima.
+                if let (Some(tex), true) = (&palanca_tex, hay_arte) {
+                    let pal_y = gy + lado * (PALANCA_Y + PALANCA_RECORRIDO * palanca.t);
+                    dh.draw_texture_pro(
+                        tex,
+                        Rectangle::new(0.0, 0.0, PALANCA_PX.0, PALANCA_PX.1),
+                        Rectangle::new(
+                            gx + lado * PALANCA_X, pal_y,
+                            lado * PALANCA_W, lado * PALANCA_H,
+                        ),
+                        Vector2::zero(), 0.0, Color::WHITE,
+                    );
+                }
+
+                // rect completo de cada ventana, y tamano del simbolo de texto
+                let (slots, tam_simbolo): ([Rectangle; 3], i32) = match &gabinete {
                     Some(tex) => {
                         dh.draw_texture_pro(
                             tex,
@@ -902,9 +1051,14 @@ fn main() {
                         );
                         dibujar_texto(&mut dh, &fuentes, TEXTO_MARQUESINA, tx, ty, tt, COLOR_MARQUESINA);
 
-                        let mut sl = [(0.0, 0.0, 0.0); 3];
+                        let mut sl = [Rectangle::new(0.0, 0.0, 0.0, 0.0); 3];
                         for (e, c) in sl.iter_mut().zip(CENTROS_SLOT.iter()) {
-                            *e = (gx + lado * c, gy + lado * CENTRO_Y_SLOT, lado * ANCHO_SLOT);
+                            *e = Rectangle::new(
+                                gx + lado * (c - ANCHO_SLOT / 2.0),
+                                gy + lado * Y_SLOT,
+                                lado * ANCHO_SLOT,
+                                lado * ALTO_SLOT,
+                            );
                         }
                         (sl, (lado * TAM_SIMBOLO) as i32)
                     }
@@ -921,35 +1075,74 @@ fn main() {
                         const GAP: i32 = 34;
                         let rx0 = cx - (RW * 3 + GAP * 2) / 2;
                         let ry = 172;
-                        let mut sl = [(0.0, 0.0, 0.0); 3];
+                        let mut sl = [Rectangle::new(0.0, 0.0, 0.0, 0.0); 3];
                         for (i, e) in sl.iter_mut().enumerate() {
                             let rx = rx0 + i as i32 * (RW + GAP);
+                            *e = Rectangle::new(rx as f32, ry as f32, RW as f32, RH as f32);
                             dh.draw_rectangle(rx, ry, RW, RH, RODILLO_BG);
-                            dh.draw_rectangle_lines_ex(
-                                Rectangle::new(rx as f32, ry as f32, RW as f32, RH as f32), 2.0, NEON,
-                            );
-                            *e = ((rx + RW / 2) as f32, (ry + RH / 2) as f32, RW as f32);
+                            dh.draw_rectangle_lines_ex(*e, 2.0, NEON);
                         }
                         (sl, 120)
                     }
                 };
 
-                // simbolos de los rodillos, encima del fondo que toque
-                for (i, (sx, sy, sw)) in slots.iter().enumerate() {
-                    let s = anim.simbolos_visual[i];
-                    // se pinta ganador solo cuando ya paro todo y el giro pago
+                // ---- simbolos: la tira scrolleando adentro de cada ventana
+                let finales = anim.finales();
+                for (i, slot) in slots.iter().enumerate() {
+                    let cx_slot = slot.x + slot.width / 2.0;
+                    let cy_slot = slot.y + slot.height / 2.0;
+                    // ganador solo cuando ya paro todo y el giro pago
+                    let s = finales[i];
                     let ganador = mostrar_res && gano_giro
-                        && anim.simbolos_visual.iter().filter(|o| **o == s).count() >= 2;
-                    // el simbolo flota apenas mientras el rodillo esta quieto
-                    let bob = if anim.activa() { 0.0 } else { flota(tiempo + i as f32, 2.0, 3.0) as f32 };
-                    let (tx, ty, tt) = ajustar_centrado(
-                        &dh, &fuentes, s.letra(), *sx, *sy + bob, tam_simbolo, *sw,
-                    );
-                    // el halo va solo en los ganadores, si no todos se ven borrosos
-                    if ganador {
-                        texto_glow(&mut dh, &fuentes, s.letra(), tx, ty, tt, color_simbolo(s, true));
-                    } else {
-                        dibujar_texto(&mut dh, &fuentes, s.letra(), tx, ty, tt, color_simbolo(s, false));
+                        && finales.iter().filter(|o| **o == s).count() >= 2;
+
+                    match &simbolos_tex {
+                        Some(tex) => {
+                            // el paso de la tira es el ancho de la ventana: las
+                            // celdas son cuadradas y asi no quedan huecos
+                            let paso = slot.width;
+                            let off = anim.offset_rodillo(i);
+                            let base = off.floor() as i32;
+                            let frac = off - off.floor();
+                            // los que no entraron en la combinacion van apagados
+                            let tinte = if mostrar_res && gano_giro && !ganador {
+                                atenuar(Color::WHITE, 0.55)
+                            } else {
+                                Color::WHITE
+                            };
+
+                            // SIN esto los simbolos de arriba y de abajo se
+                            // salen de la ventana y se dibujan sobre el gabinete
+                            let mut sc = dh.begin_scissor_mode(
+                                slot.x as i32, slot.y as i32,
+                                slot.width as i32, slot.height as i32,
+                            );
+                            for k in -1..=1 {
+                                let idx = (base - k).rem_euclid(N_SIMBOLOS as i32) as f32;
+                                let y = cy_slot + (frac + k as f32) * paso - paso / 2.0;
+                                sc.draw_texture_pro(
+                                    tex,
+                                    Rectangle::new(0.0, idx * CELDA_SIMBOLO, CELDA_SIMBOLO, CELDA_SIMBOLO),
+                                    Rectangle::new(cx_slot - paso / 2.0, y, paso, paso),
+                                    Vector2::zero(), 0.0, tinte,
+                                );
+                            }
+                        }
+                        None => {
+                            // fallback: la letra del simbolo centrado, que sigue
+                            // el mismo offset asi acompana el scroll
+                            let v = anim.simbolo_centrado(i);
+                            let bob = if anim.activa() { 0.0 } else { flota(tiempo + i as f32, 2.0, 3.0) as f32 };
+                            let (tx, ty, tt) = ajustar_centrado(
+                                &dh, &fuentes, v.letra(), cx_slot, cy_slot + bob,
+                                tam_simbolo, slot.width,
+                            );
+                            if ganador {
+                                texto_glow(&mut dh, &fuentes, v.letra(), tx, ty, tt, color_simbolo(v, true));
+                            } else {
+                                dibujar_texto(&mut dh, &fuentes, v.letra(), tx, ty, tt, color_simbolo(v, false));
+                            }
+                        }
                     }
                 }
 
@@ -961,8 +1154,12 @@ fn main() {
                 // ---- HUD, siempre afuera del gabinete
                 dibujar_texto(&mut dh, &fuentes, &format!("RONDA {} DE {}", piso + 1, PISOS.len()),
                     MARGEN_HUD, MARGEN_HUD, 26, TEXTO);
-                texto_derecha(&mut dh, &fuentes, &format!("CREDITOS {} / {}", maq.creditos, maq.cuota),
-                    ANCHO - MARGEN_HUD, MARGEN_HUD, 26, TEXTO);
+                // mientras el contador sube se pinta del color del pago
+                let contando = (cred_vista - cred_objetivo as f32).abs() >= 0.5;
+                let col_cred = if contando { anim.resultado_color } else { TEXTO };
+                texto_derecha(&mut dh, &fuentes,
+                    &format!("CREDITOS {} / {}", cred_vista.round() as i32, maq.cuota),
+                    ANCHO - MARGEN_HUD, MARGEN_HUD, 26, col_cred);
                 texto_derecha(&mut dh, &fuentes, &format!("GIROS {}", maq.giros_restantes),
                     ANCHO - MARGEN_HUD, MARGEN_HUD + 32, 26,
                     if maq.giros_restantes <= 1 { META } else { TEXTO });
@@ -988,7 +1185,11 @@ fn main() {
                 } else if !anim.activa() {
                     // parpadeo suave de la instruccion
                     let p = 0.72 + 0.28 * (anim.total * 3.0).sin();
-                    let salida = if maquina_en_laberinto { "ENTER volver" } else { "ENTER al laberinto" };
+                    let salida = if maquina_en_laberinto {
+                        "ENTER volver"
+                    } else {
+                        "ENTER salir ya, con ventaja"
+                    };
                     let hint = if maq.termino {
                         format!("sin giros     {}", salida)
                     } else {
@@ -1020,6 +1221,8 @@ fn main() {
 
             // ============================================ JUGANDO
             Escena::Jugando => {
+                audio.laberinto();
+
                 // input
                 if rl.is_key_down(KeyboardKey::KEY_LEFT) {
                     est.a -= VEL_GIRO * dt;
@@ -1049,6 +1252,11 @@ fn main() {
 
                 est.perseguir(dt);
 
+                // intensidad segun que tan encima esta la sombra. Sale de lo que
+                // Estado ya expone: no hace falta meterle audio adentro.
+                let cerca = (1.0 - est.dist_enemigo() / PISOS[piso].dist_alerta).clamp(0.0, 1.0);
+                audio.tension(dt, est.persiguiendo, cerca);
+
                 if rl.is_key_pressed(KeyboardKey::KEY_M) {
                     est.modo3d = !est.modo3d;
                 }
@@ -1066,13 +1274,13 @@ fn main() {
 
                 // transiciones
                 if est.gano {
-                    // sobrevivio el laberinto: pasa de ronda
-                    let destino = siguiente_ronda(&mut piso, &mut maq, &mut anim, &mut maquina_en_laberinto);
-                    fundido.ir_a(destino);
+                    // llego a la salida: cierra la partida
+                    fundido.ir_a(Escena::Victoria);
                 }
                 if est.atrapado {
                     frase_muerte = (est.anim_t * 1000.0) as usize % 5;
-                    escena = Escena::Derrota;
+                    // por fundido, igual que el resto de las transiciones
+                    fundido.ir_a(Escena::Derrota);
                 }
 
                 // dibujo
@@ -1141,14 +1349,19 @@ fn main() {
                     12, VIEW_H + 8, 24, TEXTO,
                 );
                 // la distancia al sujeto solo cuando de verdad anda suelto
-                let info = if est.persiguiendo {
+                // durante la ventaja se avisa, si no el jugador no entiende
+                // por que a veces la sombra no aparece
+                let info = if est.t_espera > 0.0 {
+                    format!("todavia no te vieron: {:.0}   {} fps", est.t_espera.ceil(), fps)
+                } else if est.persiguiendo {
                     format!("el sujeto a {:.1}   {} fps", dist_e, fps)
                 } else {
                     format!("{} fps", fps)
                 };
                 dibujar_texto(&mut dh, &fuentes,
                     &info, ANCHO - 260, VIEW_H + 8, 24,
-                    if est.persiguiendo && dist_e < alerta { ENEMIGO }
+                    if est.t_espera > 0.0 { CYAN }
+                    else if est.persiguiendo && dist_e < alerta { ENEMIGO }
                     else { Color { r: 140, g: 110, b: 180, a: 255 } },
                 );
                 fundido.velo(&mut dh);
@@ -1160,33 +1373,71 @@ fn main() {
 
 
 
-            // ============================================ VICTORIA
-            Escena::Victoria => {
+            // ============================================ EXITO
+            // Pegar la cuota es la unica salida limpia: no corriste, pagaste.
+            Escena::Exito => {
+                audio.silencio();
                 if rl.is_key_pressed(KeyboardKey::KEY_R) {
-                    piso = 0;
                     escena = Escena::Bienvenida;
                 }
 
+                let cx = ANCHO / 2;
+                let cfg = PISOS[piso];
                 let mut dh = rl.begin_drawing(&thread);
-                dh.clear_background(BG);
-                dh.draw_rectangle(0, 0, ANCHO, VIEW_H, Color { r: 26, g: 11, b: 46, a: 215 });
-                if let Some(tex) = &juanjo {
-                    let sz = 190.0;
-                    dh.draw_texture_pro(
-                        tex,
-                        Rectangle::new(0.0, 0.0, tex.width as f32, tex.height as f32),
-                        Rectangle::new(ANCHO as f32 / 2.0 - sz / 2.0, VIEW_H as f32 / 2.0 - sz, sz, sz),
-                        Vector2::zero(), 0.0, Color::WHITE,
-                    );
-                }
-                texto_vhs(&mut dh, &fuentes, "ESCAPASTE", ANCHO / 2,
-                    VIEW_H / 2 + 20 + flota(tiempo, 1.6, 5.0), 58, NEON, tiempo);
-                texto_centrado(&mut dh, &fuentes, "R   volver al menu", ANCHO / 2, VIEW_H / 2 + 96, 26, TEXTO);
+                dh.clear_background(Color { r: 0, g: 0, b: 0, a: 255 });
+
+                texto_vhs(&mut dh, &fuentes, "CUMPLISTE LA CUOTA", cx,
+                    VIEW_H / 2 - 96 + flota(tiempo, 1.4, 5.0), 52, DORADO, tiempo);
+                texto_centrado(&mut dh, &fuentes,
+                    &format!("{}  -  {} de {} creditos", cfg.nombre, maq.creditos, maq.cuota),
+                    cx, VIEW_H / 2 - 12, 30, TEXTO);
+                texto_centrado(&mut dh, &fuentes, "te vas caminando, no corriendo",
+                    cx, VIEW_H / 2 + 36, 26, CYAN);
+                texto_glow_centrado(&mut dh, &fuentes, "R   volver al menu", cx,
+                    VIEW_H / 2 + 116 + flota(tiempo, 2.4, 2.0), 28, NEON);
+
+                vineta(&mut dh, VINETA_BIENVENIDA.0, VINETA_BIENVENIDA.1);
+                grano(&mut dh);
                 efecto_vhs(&mut dh, tiempo, ALTO);
+                fundido.velo(&mut dh);
+            }
+
+            // ============================================ VICTORIA
+            Escena::Victoria => {
+                audio.silencio();
+                if rl.is_key_pressed(KeyboardKey::KEY_R) {
+                    // se conserva el piso elegido, para reintentarlo directo
+                    escena = Escena::Bienvenida;
+                }
+
+                // Se centra sobre ALTO, no sobre VIEW_H: aca no hay franja de
+                // HUD, VIEW_H dejaba todo 20px arriba del centro real.
+                let cx = ANCHO / 2;
+                let cy = ALTO / 2;
+                let cfg = PISOS[piso];
+                let mut dh = rl.begin_drawing(&thread);
+                dh.clear_background(Color { r: 0, g: 0, b: 0, a: 255 });
+
+                texto_vhs(&mut dh, &fuentes, "ESCAPASTE", cx,
+                    cy - 96 + flota(tiempo, 1.6, 5.0), 58, NEON, tiempo);
+                texto_centrado(&mut dh, &fuentes,
+                    &format!("{}  -  llegaste a la salida", cfg.nombre),
+                    cx, cy - 12, 30, TEXTO);
+                texto_centrado(&mut dh, &fuentes, "saliste corriendo, pero saliste",
+                    cx, cy + 36, 26, CYAN);
+                texto_glow_centrado(&mut dh, &fuentes, "R   volver al menu", cx,
+                    cy + 116 + flota(tiempo, 2.4, 2.0), 28, NEON);
+
+                vineta(&mut dh, VINETA_BIENVENIDA.0, VINETA_BIENVENIDA.1);
+                grano(&mut dh);
+                efecto_vhs(&mut dh, tiempo, ALTO);
+                fundido.velo(&mut dh);
             }
 
             // ============================================ DERROTA
             Escena::Derrota => {
+                audio.silencio();
+
                 const FRASES: [&str; 5] = [
                     "La ambicion mata",
                     "La casa siempre gana",
@@ -1196,17 +1447,26 @@ fn main() {
                 ];
 
                 if rl.is_key_pressed(KeyboardKey::KEY_R) {
-                    piso = 0;
+                    // se conserva el piso elegido, para reintentarlo directo
                     escena = Escena::Bienvenida;
                 }
 
+                let cx = ANCHO / 2;
+                let cy = ALTO / 2;
                 let mut dh = rl.begin_drawing(&thread);
                 dh.clear_background(Color { r: 2, g: 0, b: 0, a: 255 });
 
-                texto_vhs(&mut dh, &fuentes, FRASES[frase_muerte], ANCHO / 2,
-                    VIEW_H / 2 - 30 + flota(tiempo, 1.1, 4.0), 50, META, tiempo * 2.0);
-                texto_centrado(&mut dh, &fuentes, "R   volver al menu", ANCHO / 2, VIEW_H / 2 + 60, 26, TEXTO);
+                texto_vhs(&mut dh, &fuentes, FRASES[frase_muerte], cx,
+                    cy - 60 + flota(tiempo, 1.1, 4.0), 50, META, tiempo * 2.0);
+                texto_centrado(&mut dh, &fuentes, "te alcanzo en el laberinto",
+                    cx, cy + 20, 26, Color { r: 150, g: 110, b: 115, a: 255 });
+                texto_glow_centrado(&mut dh, &fuentes, "R   volver al menu", cx,
+                    cy + 116 + flota(tiempo, 2.4, 2.0), 28, META);
+
+                vineta(&mut dh, VINETA_BIENVENIDA.0, VINETA_BIENVENIDA.1);
+                grano(&mut dh);
                 efecto_vhs(&mut dh, tiempo, ALTO);
+                fundido.velo(&mut dh);
             }
         }
     }

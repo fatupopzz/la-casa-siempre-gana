@@ -3,6 +3,15 @@
 use crate::mapa::{cargar, buscar, es_pared, char_en, libre, campo_desde};
 
 const PASOS_SPAWN: i32 = 30;
+/// La sombra no puede aparecer cerca de la salida: es justo a donde el jugador
+/// tiene que ir. Con mapas de 11x11 la celda "mas lejana de A" terminaba siendo
+/// la 'B' misma, asi que la sombra arrancaba parada encima de la salida.
+/// Se mide en linea recta, que es lo que usan el apagon y la distancia de agarre.
+const DIST_MIN_SALIDA: f32 = 6.0;
+/// Y tampoco puede aparecer encima del jugador. Al alejarla de la salida en
+/// mapas de 11x11 quedaba a 6.3 en recta, justo dentro de la dist_alerta mas
+/// grande (6.0): el laberinto arrancaba practicamente a oscuras.
+const DIST_MIN_JUGADOR: f32 = 8.0;
 const RECALC: f32 = 0.25;
 const DIST_ATRAPA: f32 = 0.5;
 
@@ -21,6 +30,9 @@ pub struct Estado {
     pub anim_t: f32,
     pub persiguiendo: bool,
     pub vel_enemigo: f32,
+    /// segundos que faltan para que la sombra salga. Solo lo usa la entrada
+    /// voluntaria al laberinto; en la forzada arranca en 0 y no hace nada.
+    pub t_espera: f32,
 }
 
 impl Estado {
@@ -34,19 +46,43 @@ impl Estado {
        
 
         let campo = campo_desde(&grid, pr, pc);
+        let salida = buscar(&grid, 'B');
+
+        // Se buscan dos candidatos de una pasada: el bueno (lejos de la salida)
+        // y uno de respaldo sin ese filtro, por si el mapa es tan chico que no
+        // queda ninguna celda valida. El respaldo evita caer en la celda del
+        // jugador, que era el unwrap_or de antes y ponia la sombra encima.
         let mut spawn = None;
         let mut mejor_dif = i32::MAX;
+        let mut respaldo = None;
+        let mut respaldo_dif = i32::MAX;
+
         for (i, v) in campo.iter().enumerate() {
             if *v < 0 {
                 continue;
             }
             let dif = (*v - PASOS_SPAWN).abs();
+            if dif < respaldo_dif {
+                respaldo_dif = dif;
+                respaldo = Some(i);
+            }
+            let (fr, fc) = ((i / cols) as f32, (i % cols) as f32);
+            if let Some((br, bc)) = salida {
+                let (dr, dc) = (fr - br as f32, fc - bc as f32);
+                if (dr * dr + dc * dc).sqrt() < DIST_MIN_SALIDA {
+                    continue;
+                }
+            }
+            let (dr, dc) = (fr - pr as f32, fc - pc as f32);
+            if (dr * dr + dc * dc).sqrt() < DIST_MIN_JUGADOR {
+                continue;
+            }
             if dif < mejor_dif {
                 mejor_dif = dif;
                 spawn = Some(i);
             }
         }
-        let idx = spawn.unwrap_or(pr * cols + pc);
+        let idx = spawn.or(respaldo).unwrap_or(pr * cols + pc);
         let (er, ec) = (idx / cols, idx % cols);
 
         Estado {
@@ -64,6 +100,7 @@ impl Estado {
             anim_t: 0.0,
             persiguiendo: false,
             vel_enemigo,
+            t_espera: 0.0,
         }
     }
 
@@ -94,6 +131,16 @@ impl Estado {
     pub fn perseguir(&mut self, dt: f32) {
         self.anim_t += dt;
         self.t_recalc -= dt;
+
+        // la ventaja de haber salido por cuenta propia: la sombra todavia no
+        // aparecio. Mientras corre esto no hay persecucion ni apagon.
+        if self.t_espera > 0.0 {
+            self.t_espera -= dt;
+            if self.t_espera <= 0.0 {
+                self.persiguiendo = true;
+            }
+        }
+
         if !self.persiguiendo { return; }
         if self.t_recalc <= 0.0 {
             let (pr, pc) = (self.y as usize, self.x as usize);
