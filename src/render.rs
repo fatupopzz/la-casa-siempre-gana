@@ -2,7 +2,7 @@
 
 use raylib::prelude::*;
 use crate::estado::Estado;
-use crate::raycast::{lanzar, MAX_DIST};
+use crate::raycast::{lanzar_dda, MAX_DIST};
 use crate::mapa::es_pared;
 use crate::{
     ANCHO, VIEW_H,
@@ -117,7 +117,7 @@ pub fn render_2d(dh: &mut RaylibDrawHandle<'_>, est: &Estado) {
     for i in 0..NUM_RAYOS_2D {
         let t = i as f32 / (NUM_RAYOS_2D - 1) as f32;
         let ang = est.a - FOV / 2.0 + FOV * t;
-        let imp = lanzar(&est.grid, est.x, est.y, ang);
+        let imp = lanzar_dda(&est.grid, est.x, est.y, ang);
         let fin = Vector2::new(
             px + ang.cos() * imp.d * bs as f32,
             py + ang.sin() * imp.d * bs as f32,
@@ -171,7 +171,7 @@ pub fn render_3d(
     for (i, z) in zbuffer.iter_mut().enumerate() {
         let t = i as f32 / n as f32;
         let ang = est.a - FOV / 2.0 + FOV * t;
-        let imp = lanzar(&est.grid, est.x, est.y, ang);
+        let imp = lanzar_dda(&est.grid, est.x, est.y, ang);
 
         let d = (imp.d * (ang - est.a).cos()).max(0.05);
         *z = d;
