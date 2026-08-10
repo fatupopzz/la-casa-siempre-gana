@@ -1,6 +1,6 @@
 // estado.rs — estado del juego, movimiento del jugador, perseguidor
 
-use crate::mapa::{cargar, buscar, es_pared, char_en, libre, campo_desde};
+use crate::mapa::{cargar, buscar, char_en, libre, campo_desde};
 
 // La sombra sale EN LA SALIDA y arranca a venir hacia vos de una. Suena raro
 // que nazca en la meta, pero es al reves de lo que parece: como te persigue,

@@ -166,13 +166,15 @@ pub fn render_3d(
     let n = (ANCHO / ANCHO_ESTACA) as usize;
     let mut zbuffer = vec![MAX_DIST; n];
 
-    for i in 0..n {
+    // se itera el zbuffer en vez de indexarlo: hay una estaca por celda y el
+    // indice se sigue necesitando para el angulo y la x de pantalla
+    for (i, z) in zbuffer.iter_mut().enumerate() {
         let t = i as f32 / n as f32;
         let ang = est.a - FOV / 2.0 + FOV * t;
         let imp = lanzar(&est.grid, est.x, est.y, ang);
 
         let d = (imp.d * (ang - est.a).cos()).max(0.05);
-        zbuffer[i] = d;
+        *z = d;
 
         let stake_height = hh / d;
         let stake_top = hh - stake_height / 2.0;
@@ -310,6 +312,17 @@ pub fn render_3d(
     zbuffer
 }
 
+/// Implementacion de referencia del billboard texturizado: recorta el frame de
+/// la tira horizontal del spritesheet y hace el z-test por columna contra el
+/// zbuffer, igual que las estacas de pared.
+///
+/// Hoy no tiene call site: el perseguidor se dibuja procedural en
+/// render_sombra, que no necesita textura. Esta espera un spritesheet que
+/// todavia no existe.
+///
+/// Pendiente de confirmar con el profesor si el sprite animado tiene que ser
+/// texturizado; si la respuesta es que si, se arranca desde aca.
+#[allow(dead_code)]
 pub fn render_sprite(
     dh: &mut RaylibDrawHandle<'_>,
     est: &Estado,
@@ -491,7 +504,7 @@ pub fn render_sombra(
             };
             let alpha = (edge_x * edge_y * pierna * ff * pulso * 230.0) as u8;
 
-            if y >= 0 && y < VIEW_H {
+            if (0..VIEW_H).contains(&y) {
                 dh.draw_rectangle(
                     x as i32, y, paso as i32, h,
                     Color { r: 0, g: 0, b: 0, a: alpha },
@@ -499,26 +512,5 @@ pub fn render_sombra(
             }
             y += tira;
         }
-    }
-}
-
-/// vineta: oscurece arriba y abajo
-pub fn render_vigneta(dh: &mut RaylibDrawHandle<'_>) {
-    let bandas = 20i32;
-    let alto_banda = VIEW_H / bandas;
-    for i in 0..bandas / 3 {
-        let t = 1.0 - (i as f32 / (bandas as f32 / 3.0));
-        let a = (t * t * 180.0) as u8;
-        dh.draw_rectangle(0, i * alto_banda, ANCHO, alto_banda + 1,
-            Color { r: 0, g: 0, b: 0, a });
-    }
-    for i in 0..bandas / 3 {
-        let t = i as f32 / (bandas as f32 / 3.0);
-        let a = (t * t * 180.0) as u8;
-        dh.draw_rectangle(
-            0, VIEW_H - (bandas / 3 - i) * alto_banda,
-            ANCHO, alto_banda + 1,
-            Color { r: 0, g: 0, b: 0, a },
-        );
     }
 }

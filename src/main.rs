@@ -522,6 +522,10 @@ fn texto_glow_centrado(dh: &mut RaylibDrawHandle<'_>, f: &Fuentes, txt: &str, cx
 }
 
 /// separacion de canales rojo/cyan con temblor, como cinta gastada
+// La firma queda larga a proposito: todos los helpers de texto de aca abajo
+// tienen la misma forma (dh, fuentes, texto, posicion, tamano, color) y este
+// solo suma el reloj. Agruparlos en un struct rompe el parecido entre ellos.
+#[allow(clippy::too_many_arguments)]
 fn texto_vhs(dh: &mut RaylibDrawHandle<'_>, f: &Fuentes, txt: &str, cx: i32, y: i32, tam: i32, col: Color, t: f32) {
     let w = ancho_texto(dh, f, txt, tam);
     let x = cx - w / 2;
