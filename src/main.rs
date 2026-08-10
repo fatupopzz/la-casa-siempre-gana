@@ -43,6 +43,15 @@ const VEL: f32 = 3.2;
 const VEL_GIRO: f32 = 2.4;
 const SENS_MOUSE: f32 = 0.003;
 
+// -------------------------------------------------- control
+// El control es entrada ALTERNATIVA: se suma al teclado, no lo reemplaza. Todo
+// lo que se hacia con teclas se sigue haciendo igual, y las dos entradas andan
+// a la vez sin pisarse.
+const GAMEPAD: i32 = 0; // solo el primer control, el juego es de a uno
+/// Zona muerta de los sticks. Los analogicos nunca descansan en cero exacto:
+/// sin esto el jugador camina y gira solo con el control quieto.
+const ZONA_MUERTA: f32 = 0.20;
+
 // -------------------------------------------------- pisos
 /// Todo lo que hace que un piso se sienta distinto sin tocar los mapas: la
 /// cuota que hay que pegarle a la maquina y que tan encima se te viene la
@@ -57,33 +66,46 @@ struct ConfigPiso {
     dist_alerta: f32,
 }
 
-// Las tres velocidades estan arriba de VEL (3.2) a proposito: no se le escapa
-// corriendo en ningun piso. Lo que cambia entre pisos es cuanto margen tenes
-// para llegar a la salida, no si podes o no dejarla atras.
+// Las tres velocidades estan DEBAJO de VEL (3.2), al reves de como estaba.
+// Motivo: los pasillos miden una celda y DIST_ATRAPA es 0.5, asi que no se le
+// puede pasar por al lado. Con la sombra mas rapida, cruzartela de frente era
+// muerte segura sin importar como jugaras. Ahora podes retroceder y buscar otra
+// rama. Le sacas 1.0 / 0.75 / 0.5 por segundo, que es el margen para perderte:
+// el jugador promedio no encuentra la ruta buena a la primera y necesita poder
+// equivocarse de pasillo sin que eso sea la muerte.
+//
+// dist_alerta tambien bajo: es el radio del apagon, y con 6.0 en un mapa de
+// 11x11 la sombra te cegaba desde media pantalla de distancia. Ahora tiene que
+// estar de verdad encima para taparte la vista.
 const PISOS: [ConfigPiso; 3] = [
     ConfigPiso {
         nombre: "PISO 1",
         mapa: "mapas/piso1.txt",
         cuota: 65,
         giros: 20,
-        vel_enemigo: 3.8,
-        dist_alerta: 6.0,
+        vel_enemigo: 2.2,
+        dist_alerta: 4.5,
     },
     ConfigPiso {
         nombre: "PISO 2",
         mapa: "mapas/piso2.txt",
         cuota: 70,
         giros: 16,
-        vel_enemigo: 4.1,
-        dist_alerta: 5.0,
+        vel_enemigo: 2.45,
+        dist_alerta: 4.0,
     },
     ConfigPiso {
         nombre: "PISO 3",
         mapa: "mapas/piso3.txt",
-        cuota: 70,
+        // 55 para que la rampa quede monotona: 44.4% / 20.7% / 19.0% de exito,
+        // cada piso mas duro que el anterior. A 70 no daba, el 76% de los que
+        // pagaban dependia de un triple 7 (que sale 9% de las veces en 12
+        // giros); a 55 el 55% la pega sin ver un 7. Necesita p81, o sea que
+        // NO pasa el chequeo p75: la monotonia se eligio por encima de eso.
+        cuota: 55,
         giros: 12,
-        vel_enemigo: 4.4,
-        dist_alerta: 4.0,
+        vel_enemigo: 2.7,
+        dist_alerta: 3.5,
     },
 ];
 
@@ -91,8 +113,17 @@ const PISOS: [ConfigPiso; 3] = [
 // adentro por quedarte sin giros. Sin esto elegir correr no cambiaba nada y era
 // siempre la peor jugada: mismo laberinto, pero habiendo gastado los giros.
 // Sigue sin poder escaparsele corriendo, la sombra queda arriba de VEL (3.2).
-const VENTAJA_RETRASO: f32 = 3.0; // segundos antes de que la sombra salga
-const VENTAJA_VEL: f32 = 0.3;     // cuanto mas lenta va la sombra
+/// Segundos antes de que la sombra salga de la meta. En la entrada forzada va
+/// en cero a proposito: si se queda quieta en la salida te espera ahi, que era
+/// justo el problema. Saliendo de una, te la cruzas a mitad de camino y despues
+/// la salida queda libre.
+const RETRASO_SOMBRA: f32 = 0.0;
+const VENTAJA_RETRASO: f32 = 1.5; // lo que suma entrar por decision propia
+const VENTAJA_VEL: f32 = 0.15;    // cuanto mas lenta va la sombra
+/// Piso duro: por mas ventaja que tenga, la sombra nunca baja de aca. Con las
+/// velocidades nuevas el piso 1 (3.45) menos la ventaja daba 3.15, o sea MAS
+/// LENTA que el jugador, y ahi si se le escapaba corriendo en linea recta.
+const VEL_SOMBRA_MIN: f32 = VEL + 0.15;
 
 /// arranca el laberinto de un piso: su mapa, la sombra suelta y a la velocidad
 /// que le toca. Todo sale del ConfigPiso, no hay consts de por medio.
@@ -101,19 +132,23 @@ const VENTAJA_VEL: f32 = 0.3;     // cuanto mas lenta va la sombra
 /// unos segundos antes de que la sombra salga y la sombra va algo mas lenta.
 fn entrar_al_laberinto(cfg: &ConfigPiso, voluntario: bool) -> Estado {
     let vel = if voluntario {
-        cfg.vel_enemigo - VENTAJA_VEL
+        (cfg.vel_enemigo - VENTAJA_VEL).max(VEL_SOMBRA_MIN)
     } else {
         cfg.vel_enemigo
     };
     let mut est = Estado::nuevo(cfg.mapa, vel);
     est.modo3d = true;
-    if voluntario {
-        // todavia no te vieron salir: la sombra aparece despues
-        est.persiguiendo = false;
-        est.t_espera = VENTAJA_RETRASO;
+    // La sombra sale por la puerta por la que entraste, no aparece adelante.
+    // Hasta que salga no persigue ni te ciega; el que se queda quieto la ve
+    // salir encima suyo.
+    est.t_espera = if voluntario {
+        RETRASO_SOMBRA + VENTAJA_RETRASO
     } else {
-        est.persiguiendo = true;
-    }
+        RETRASO_SOMBRA
+    };
+    // con espera en cero tiene que arrancar persiguiendo ya: si no, el contador
+    // nunca la despierta y la sombra se queda clavada en la salida
+    est.persiguiendo = est.t_espera <= 0.0;
     est
 }
 
@@ -127,6 +162,50 @@ fn rodillos_parados(f: FaseRodillos) -> usize {
         _ => 3,
     }
 }
+
+// -------------------------------------------------- lectura del control
+// Los tres devuelven el valor neutro (0.0 / false) cuando no hay control
+// conectado, asi que el que llama nunca tiene que preguntar si hay uno. Sin
+// gamepad el juego corre exactamente igual que antes.
+
+/// Lee un eje con zona muerta. Reescala lo que sobra del umbral a [0, 1] para
+/// que apenas se pasa la zona muerta el movimiento arranque en cero y no pegue
+/// un salto a ZONA_MUERTA. Conserva el signo, asi que sigue siendo analogico:
+/// medio stick es media velocidad.
+fn eje(rl: &RaylibHandle, axis: GamepadAxis) -> f32 {
+    if !rl.is_gamepad_available(GAMEPAD) {
+        return 0.0;
+    }
+    let v = rl.get_gamepad_axis_movement(GAMEPAD, axis);
+    if v.abs() < ZONA_MUERTA {
+        return 0.0;
+    }
+    let t = (v.abs() - ZONA_MUERTA) / (1.0 - ZONA_MUERTA);
+    t.clamp(0.0, 1.0) * v.signum()
+}
+
+/// Boton apretado en ESTE frame, para lo que va de a un disparo (elegir piso,
+/// confirmar, jalar). El equivalente de is_key_pressed.
+fn boton(rl: &RaylibHandle, b: GamepadButton) -> bool {
+    rl.is_gamepad_available(GAMEPAD) && rl.is_gamepad_button_pressed(GAMEPAD, b)
+}
+
+/// Cualquier boton, para las pantallas finales donde alcanza con "apreta lo que
+/// sea" y no importa cual.
+fn boton_cualquiera(rl: &RaylibHandle) -> bool {
+    rl.is_gamepad_available(GAMEPAD) && rl.get_gamepad_button_pressed().is_some()
+}
+
+// -------------------------------------------------- apagon del perseguidor
+// Cuanto te ciega la sombra al acercarse. Estaba en velo de 220 con bandas casi
+// cerradas y parpadeo de 180: quedabas practicamente ciego justo cuando tenias
+// que esquivarla, que ahora es la jugada principal. La idea es que se sienta
+// que se acerca, no que te apaguen la pantalla.
+const APAGON_VELO: f32 = 85.0;     // velo negro maximo, sobre 255
+const APAGON_BANDAS: f32 = 140.0;  // cuanto tapan las bandas de los bordes
+const APAGON_FLICKER: f32 = 45.0;  // el parpadeo de cuando la tiene encima
+/// hasta donde llegan a cerrar las bandas: 0.30 deja el centro siempre limpio
+const APAGON_CENTRO: f32 = 0.30;
 
 // -------------------------------------------------- fundido entre escenas
 const T_FUNDIDO: f32 = 0.25; // dura lo mismo cerrar que abrir
@@ -566,11 +645,6 @@ fn main() {
     rl.set_target_fps(60);
     rl.disable_cursor();
 
-    let perseguidor_tex = rl.load_texture(&thread, "assets/sprites/sombra_sheet .png").ok();
-    if perseguidor_tex.is_none() {
-        println!("aviso: no encontre assets/perseguidor.png, el enemigo va invisible en 3D");
-    }
-
    let mut texturas: Vec<Option<Texture2D>> = Vec::new();
     for p in ["assets/texturas/concreto.png", "assets/texturas/azulejo.png", "assets/texturas/metal.png"] {
         let t = rl.load_texture(&thread, p).ok();
@@ -689,6 +763,11 @@ fn main() {
     let mut cred_vista = 0.0f32;
     // de donde se entro a la maquina: false = la del arranque, true = una pared M del laberinto
     let mut maquina_en_laberinto = false;
+    // de que ruta se salio: true = jalo ENTER y se fue, false = se quedo sin giros
+    let mut salio_voluntario = false;
+    // pego la cuota desde una 'M' de adentro: la sombra se apago pero todavia
+    // falta caminar hasta la 'B'. Cambia el final que se dispara al pisarla.
+    let mut pago_cuota = false;
 
     while !rl.window_should_close() {
         let dt = rl.get_frame_time();
@@ -707,10 +786,12 @@ fn main() {
                 // la seleccion mueve `piso`, que es el indice de PISOS: de ahi
                 // sale el mapa, la cuota, los giros y la sombra
                 let n_pisos = PISOS.len();
-                if rl.is_key_pressed(KeyboardKey::KEY_A) || rl.is_key_pressed(KeyboardKey::KEY_LEFT) {
+                if rl.is_key_pressed(KeyboardKey::KEY_A) || rl.is_key_pressed(KeyboardKey::KEY_LEFT)
+                    || boton(&rl, GamepadButton::GAMEPAD_BUTTON_LEFT_FACE_LEFT) {
                     piso = (piso + n_pisos - 1) % n_pisos;
                 }
-                if rl.is_key_pressed(KeyboardKey::KEY_D) || rl.is_key_pressed(KeyboardKey::KEY_RIGHT) {
+                if rl.is_key_pressed(KeyboardKey::KEY_D) || rl.is_key_pressed(KeyboardKey::KEY_RIGHT)
+                    || boton(&rl, GamepadButton::GAMEPAD_BUTTON_LEFT_FACE_RIGHT) {
                     piso = (piso + 1) % n_pisos;
                 }
                 // atajo por numero, como estaba antes
@@ -719,12 +800,16 @@ fn main() {
                 if rl.is_key_pressed(KeyboardKey::KEY_THREE) { piso = 2; }
 
                 if !fundido.en_curso()
-                    && (rl.is_key_pressed(KeyboardKey::KEY_ENTER) || rl.is_key_pressed(KeyboardKey::KEY_SPACE)) {
+                    && (rl.is_key_pressed(KeyboardKey::KEY_ENTER) || rl.is_key_pressed(KeyboardKey::KEY_SPACE)
+                        || boton(&rl, GamepadButton::GAMEPAD_BUTTON_RIGHT_FACE_RIGHT)) {
                     // se arranca en la maquina, el laberinto recien si falla la cuota
                     let cfg = PISOS[piso];
                     maq = Maquina::nueva(cfg.cuota, cfg.giros);
                     anim = AnimRodillos::nueva();
                     maquina_en_laberinto = false;
+                    salio_voluntario = false;
+                    pago_cuota = false;
+                    cred_vista = 0.0; // si no, el contador viene bajando desde la partida anterior
                     fundido.ir_a(Escena::Maquina);
                 }
 
@@ -933,7 +1018,8 @@ fn main() {
                 // porque durante la bajada la animacion todavia no arranco y sin
                 // eso se colaba un segundo jalon en esos 0.10s.
                 if !anim.activa() && !palanca.activa() && !fundido.en_curso() && !maq.termino
-                    && rl.is_key_pressed(KeyboardKey::KEY_F) {
+                    && (rl.is_key_pressed(KeyboardKey::KEY_F)
+                        || boton(&rl, GamepadButton::GAMEPAD_BUTTON_RIGHT_FACE_DOWN)) {
                     palanca.jalar();
                     audio.palanca(); // el clunk va aca, al apretar
                 }
@@ -949,10 +1035,12 @@ fn main() {
 
                 // salir por voluntad propia
                 if !anim.activa() && !palanca.activa() && !fundido.en_curso()
-                    && rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
+                    && (rl.is_key_pressed(KeyboardKey::KEY_ENTER)
+                        || boton(&rl, GamepadButton::GAMEPAD_BUTTON_RIGHT_FACE_RIGHT)) {
                     if !maquina_en_laberinto {
                         // se va por su cuenta: se lleva la ventaja
                         est = entrar_al_laberinto(&PISOS[piso], true);
+                        salio_voluntario = true;
                     }
                     fundido.ir_a(Escena::Jugando);
                 }
@@ -960,14 +1048,27 @@ fn main() {
                 // recien cuando la animacion termino de mostrar el resultado se decide
                 if termino_anim && maq.termino {
                     if maq.gano() {
-                        // pego la cuota: la partida se cierra en verde
-                        fundido.ir_a(Escena::Exito);
+                        if maquina_en_laberinto {
+                            // pago desde adentro: la maquina no es la puerta de
+                            // salida. Se apaga la sombra y se vuelve al pasillo,
+                            // el final se cobra recien al pisar la 'B'.
+                            est.persiguiendo = false;
+                            // sin esto, una espera a medio correr la despierta de
+                            // nuevo apenas llega a cero
+                            est.t_espera = 0.0;
+                            pago_cuota = true;
+                            fundido.ir_a(Escena::Jugando);
+                        } else {
+                            // pego la cuota sin haber entrado: se cierra en verde
+                            fundido.ir_a(Escena::Exito);
+                        }
                     } else {
                         // se le acabaron los giros sin llegar a la cuota
                         audio.fallo();
                         if !maquina_en_laberinto {
                             // lo tiran adentro: sin ventaja, la sombra ya salio
                             est = entrar_al_laberinto(&PISOS[piso], false);
+                            salio_voluntario = false;
                             // corte seco de la musica y un rato en negro antes
                             // del laberinto: se acabo la fiesta
                             audio.silencio();
@@ -1235,6 +1336,10 @@ fn main() {
                 let mouse_dx = rl.get_mouse_delta().x;
                 est.a += mouse_dx * SENS_MOUSE;
 
+                // stick derecho: gira igual que las flechas, pero escalado por
+                // cuanto se empuja. Se suma, asi que mouse y stick conviven.
+                est.a += eje(&rl, GamepadAxis::GAMEPAD_AXIS_RIGHT_X) * VEL_GIRO * dt;
+
                 let paso = VEL * dt;
                 if rl.is_key_down(KeyboardKey::KEY_W) || rl.is_key_down(KeyboardKey::KEY_UP) {
                     est.avanzar(est.a.cos() * paso, est.a.sin() * paso);
@@ -1248,6 +1353,22 @@ fn main() {
                 }
                 if rl.is_key_down(KeyboardKey::KEY_E) || rl.is_key_down(KeyboardKey::KEY_D) {
                     est.avanzar(lado.cos() * paso, lado.sin() * paso);
+                }
+
+                // stick izquierdo: lo mismo que WSQE pero analogico, la
+                // velocidad sale de cuanto se empuja. Va aparte de los bloques
+                // de teclado y no en un else, para que las dos entradas anden a
+                // la vez en vez de que una anule a la otra.
+                let stick_y = eje(&rl, GamepadAxis::GAMEPAD_AXIS_LEFT_Y);
+                if stick_y != 0.0 {
+                    // el eje Y del stick da NEGATIVO hacia adelante, por eso el menos
+                    let p = -stick_y * paso;
+                    est.avanzar(est.a.cos() * p, est.a.sin() * p);
+                }
+                let stick_x = eje(&rl, GamepadAxis::GAMEPAD_AXIS_LEFT_X);
+                if stick_x != 0.0 {
+                    let p = stick_x * paso;
+                    est.avanzar(lado.cos() * p, lado.sin() * p);
                 }
 
                 est.perseguir(dt);
@@ -1267,15 +1388,22 @@ fn main() {
                 // pared M: se entra a la maquina sin perder la posicion en el laberinto
                 let junto_a_maquina = hay_adyacente(&est.grid, est.x, est.y, 'M');
                 if junto_a_maquina && !maq.termino && !fundido.en_curso()
-                    && rl.is_key_pressed(KeyboardKey::KEY_F) {
+                    && (rl.is_key_pressed(KeyboardKey::KEY_F)
+                        || boton(&rl, GamepadButton::GAMEPAD_BUTTON_RIGHT_FACE_DOWN)) {
                     maquina_en_laberinto = true;
                     fundido.ir_a(Escena::Maquina);
                 }
 
                 // transiciones
                 if est.gano {
-                    // llego a la salida: cierra la partida
-                    fundido.ir_a(Escena::Victoria);
+                    // llego a la salida: cierra la partida. Con la cuota ya pagada
+                    // el final es el de pagar, no el de haberse escapado corriendo;
+                    // el resto lo bifurca sola la Victoria segun salio_voluntario.
+                    if pago_cuota {
+                        fundido.ir_a(Escena::Exito);
+                    } else {
+                        fundido.ir_a(Escena::Victoria);
+                    }
                 }
                 if est.atrapado {
                     frase_muerte = (est.anim_t * 1000.0) as usize % 5;
@@ -1303,12 +1431,13 @@ fn main() {
                 let alerta = PISOS[piso].dist_alerta;
                 if est.persiguiendo && dist_e < alerta {
     let t = (1.0 - dist_e / alerta).clamp(0.0, 1.0);
-    let radio = (1.0 - t) * 0.5;
+    // el centro nunca se cierra del todo: siempre te queda por donde mirar
+    let radio = APAGON_CENTRO + (1.0 - t) * (0.5 - APAGON_CENTRO * 0.5);
     for band in 0..20 {
         let bt = band as f32 / 20.0;
         if bt > radio {
             let ba = ((bt - radio) / (1.0 - radio)).clamp(0.0, 1.0);
-            let a = (ba * ba * 255.0) as u8;
+            let a = (ba * ba * APAGON_BANDAS) as u8;
             let h = (VIEW_H as f32 * 0.05) as i32 + 1;
             dh.draw_rectangle(0, band * h, ANCHO, h, Color { r: 0, g: 0, b: 0, a });
             dh.draw_rectangle(0, VIEW_H - (band + 1) * h, ANCHO, h, Color { r: 0, g: 0, b: 0, a });
@@ -1319,12 +1448,12 @@ fn main() {
     } // <-- cierra el for
 
     // esto va AFUERA del for
-    let black_a = (t * t * t * 220.0) as u8;
+    let black_a = (t * t * t * APAGON_VELO) as u8;
     dh.draw_rectangle(0, 0, ANCHO, VIEW_H, Color { r: 0, g: 0, b: 0, a: black_a });
 
     if t > 0.6 {
         let flicker = ((est.anim_t * 12.0).sin() * (est.anim_t * 37.0).sin()).abs();
-        let fa = (flicker * t * 180.0) as u8;
+        let fa = (flicker * t * APAGON_FLICKER) as u8;
         dh.draw_rectangle(0, 0, ANCHO, VIEW_H, Color { r: 0, g: 0, b: 0, a: fa });
     }
 }
@@ -1344,8 +1473,14 @@ fn main() {
                 dh.draw_rectangle(0, VIEW_H, ANCHO, HUD_H, Color { r: 16, g: 7, b: 30, a: 255 });
 
                 let modo = if est.modo3d { "3D" } else { "2D" };
+                // con la cuota pagada ya no hay nadie atras: solo queda irse
+                let objetivo = if pago_cuota {
+                    "pagaste  -  ya nadie te sigue, sali por la B"
+                } else {
+                    "llega a la salida"
+                };
                 dibujar_texto(&mut dh, &fuentes,
-                    &format!("[{}]  ronda {}/{}  -  llega a la salida", modo, piso + 1, PISOS.len()),
+                    &format!("[{}]  ronda {}/{}  -  {}", modo, piso + 1, PISOS.len(), objetivo),
                     12, VIEW_H + 8, 24, TEXTO,
                 );
                 // la distancia al sujeto solo cuando de verdad anda suelto
@@ -1377,7 +1512,7 @@ fn main() {
             // Pegar la cuota es la unica salida limpia: no corriste, pagaste.
             Escena::Exito => {
                 audio.silencio();
-                if rl.is_key_pressed(KeyboardKey::KEY_R) {
+                if rl.is_key_pressed(KeyboardKey::KEY_R) || boton_cualquiera(&rl) {
                     escena = Escena::Bienvenida;
                 }
 
@@ -1405,7 +1540,7 @@ fn main() {
             // ============================================ VICTORIA
             Escena::Victoria => {
                 audio.silencio();
-                if rl.is_key_pressed(KeyboardKey::KEY_R) {
+                if rl.is_key_pressed(KeyboardKey::KEY_R) || boton_cualquiera(&rl) {
                     // se conserva el piso elegido, para reintentarlo directo
                     escena = Escena::Bienvenida;
                 }
@@ -1418,15 +1553,29 @@ fn main() {
                 let mut dh = rl.begin_drawing(&thread);
                 dh.clear_background(Color { r: 0, g: 0, b: 0, a: 255 });
 
-                texto_vhs(&mut dh, &fuentes, "ESCAPASTE", cx,
-                    cy - 96 + flota(tiempo, 1.6, 5.0), 58, NEON, tiempo);
-                texto_centrado(&mut dh, &fuentes,
-                    &format!("{}  -  llegaste a la salida", cfg.nombre),
-                    cx, cy - 12, 30, TEXTO);
-                texto_centrado(&mut dh, &fuentes, "saliste corriendo, pero saliste",
-                    cx, cy + 36, 26, CYAN);
-                texto_glow_centrado(&mut dh, &fuentes, "R   volver al menu", cx,
-                    cy + 116 + flota(tiempo, 2.4, 2.0), 28, NEON);
+                if salio_voluntario {
+                    // Ruta fria: te fuiste antes de que te obligaran. No hay logro que
+                    // cantar, asi que no va ni NEON ni CYAN: sale todo en laton apagado.
+                    texto_centrado(&mut dh, &fuentes, "TE FUISTE", cx,
+                        cy - 96 + flota(tiempo, 0.8, 2.0), 58, LATON);
+                    texto_centrado(&mut dh, &fuentes,
+                        &format!("{}  -  {} de {} creditos", cfg.nombre, maq.creditos, maq.cuota),
+                        cx, cy - 12, 30, LATON_TENUE);
+                    texto_centrado(&mut dh, &fuentes, "te vas con lo que trajiste",
+                        cx, cy + 36, 26, LATON_TENUE);
+                    texto_centrado(&mut dh, &fuentes, "R   volver al menu", cx,
+                        cy + 116, 28, LATON_TENUE);
+                } else {
+                    texto_vhs(&mut dh, &fuentes, "ESCAPASTE", cx,
+                        cy - 96 + flota(tiempo, 1.6, 5.0), 58, NEON, tiempo);
+                    texto_centrado(&mut dh, &fuentes,
+                        &format!("{}  -  llegaste a la salida", cfg.nombre),
+                        cx, cy - 12, 30, TEXTO);
+                    texto_centrado(&mut dh, &fuentes, "saliste corriendo, pero saliste",
+                        cx, cy + 36, 26, CYAN);
+                    texto_glow_centrado(&mut dh, &fuentes, "R   volver al menu", cx,
+                        cy + 116 + flota(tiempo, 2.4, 2.0), 28, NEON);
+                }
 
                 vineta(&mut dh, VINETA_BIENVENIDA.0, VINETA_BIENVENIDA.1);
                 grano(&mut dh);
@@ -1446,7 +1595,7 @@ fn main() {
                     "El juego estaba arreglado",
                 ];
 
-                if rl.is_key_pressed(KeyboardKey::KEY_R) {
+                if rl.is_key_pressed(KeyboardKey::KEY_R) || boton_cualquiera(&rl) {
                     // se conserva el piso elegido, para reintentarlo directo
                     escena = Escena::Bienvenida;
                 }
