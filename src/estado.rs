@@ -2,17 +2,12 @@
 
 use crate::mapa::{cargar, buscar, es_pared, char_en, libre, campo_desde};
 
-const PASOS_SPAWN: i32 = 30;
-/// La sombra no puede aparecer cerca de la salida: es justo a donde el jugador
-/// tiene que ir. Con mapas de 11x11 la celda "mas lejana de A" terminaba siendo
-/// la 'B' misma, asi que la sombra arrancaba parada encima de la salida.
-/// Se mide en linea recta, que es lo que usan el apagon y la distancia de agarre.
-const DIST_MIN_SALIDA: f32 = 6.0;
-/// Y tampoco puede aparecer encima del jugador. Al alejarla de la salida en
-/// mapas de 11x11 quedaba a 6.3 en recta, justo dentro de la dist_alerta mas
-/// grande (6.0): el laberinto arrancaba practicamente a oscuras.
-const DIST_MIN_JUGADOR: f32 = 8.0;
-const RECALC: f32 = 0.25;
+// La sombra sale EN LA SALIDA y arranca a venir hacia vos de una. Suena raro
+// que nazca en la meta, pero es al reves de lo que parece: como te persigue,
+// abandona la salida en el primer segundo y te la deja libre. Lo que no se
+// puede es que se quede parada ahi esperandote, y por eso no lleva espera en la
+// entrada forzada.
+const RECALC: f32 = 0.7;
 const DIST_ATRAPA: f32 = 0.5;
 
 pub struct Estado {
@@ -38,52 +33,13 @@ pub struct Estado {
 impl Estado {
     /// la velocidad de la sombra la manda el ConfigPiso del piso que se entra:
     /// va como parametro para que no exista un default global que se pueda
-    /// quedar viejo. Siempre es mayor que la del jugador.
+    /// quedar viejo. Hoy es MENOR que la del jugador, a proposito.
     pub fn nuevo(path: &str, vel_enemigo: f32) -> Self {
         let grid = cargar(path);
         let (pr, pc) = buscar(&grid, 'A').expect("el maze.txt no tiene 'A'");
-        let cols = grid[0].len();
-       
-
         let campo = campo_desde(&grid, pr, pc);
-        let salida = buscar(&grid, 'B');
-
-        // Se buscan dos candidatos de una pasada: el bueno (lejos de la salida)
-        // y uno de respaldo sin ese filtro, por si el mapa es tan chico que no
-        // queda ninguna celda valida. El respaldo evita caer en la celda del
-        // jugador, que era el unwrap_or de antes y ponia la sombra encima.
-        let mut spawn = None;
-        let mut mejor_dif = i32::MAX;
-        let mut respaldo = None;
-        let mut respaldo_dif = i32::MAX;
-
-        for (i, v) in campo.iter().enumerate() {
-            if *v < 0 {
-                continue;
-            }
-            let dif = (*v - PASOS_SPAWN).abs();
-            if dif < respaldo_dif {
-                respaldo_dif = dif;
-                respaldo = Some(i);
-            }
-            let (fr, fc) = ((i / cols) as f32, (i % cols) as f32);
-            if let Some((br, bc)) = salida {
-                let (dr, dc) = (fr - br as f32, fc - bc as f32);
-                if (dr * dr + dc * dc).sqrt() < DIST_MIN_SALIDA {
-                    continue;
-                }
-            }
-            let (dr, dc) = (fr - pr as f32, fc - pc as f32);
-            if (dr * dr + dc * dc).sqrt() < DIST_MIN_JUGADOR {
-                continue;
-            }
-            if dif < mejor_dif {
-                mejor_dif = dif;
-                spawn = Some(i);
-            }
-        }
-        let idx = spawn.or(respaldo).unwrap_or(pr * cols + pc);
-        let (er, ec) = (idx / cols, idx % cols);
+        // arranca en la salida; si el mapa no tiene 'B' cae en la entrada
+        let (er, ec) = buscar(&grid, 'B').unwrap_or((pr, pc));
 
         Estado {
             grid,
