@@ -19,8 +19,32 @@ const FOG: Color = Color { r: 6, g: 4, b: 4, a: 255 };
 const FOG_DENSITY: f32 = 0.22;
 const FOG_EDGE: f32 = 1.6;
 const STEP_PISO: i32 = 2; // alto en px de cada tira draw_rectangle
+/// Piso de visibilidad de la sombra. Es una silueta negra sobre un fondo
+/// oscuro, asi que con el fog normal de la escena se volvia invisible hasta
+/// tenerla encima. Con el piso se ve venir por el pasillo, que es lo que te
+/// deja esquivarla en vez de comerte el susto.
+const VIS_MIN_SOMBRA: f32 = 0.55;
 const SPRITE_FRAMES: usize = 4;
 const SPRITE_FPS: f32 = 4.0;
+/// Ciclo de caminado de la silueta, en 4 poses discretas: contacto, paso,
+/// contacto, paso. Va por pasos y no por un sin continuo a proposito: el corte
+/// seco entre poses es lo que se lee como pixel art, el sin se lee como que la
+/// figura flota.
+///
+/// El balanceo cruza de un lado al otro y vuelve. El bob sube en las dos poses
+/// intermedias, que es cuando el cuerpo se levanta sobre la pierna que apoya.
+const BALANCEO_FRAME: [f32; SPRITE_FRAMES] = [-1.0, 0.0, 1.0, 0.0];
+const BOB_FRAME: [f32; SPRITE_FRAMES] = [0.0, -1.0, 0.0, -1.0];
+/// Amplitudes en fraccion del billboard, no en pixeles: asi el caminado se
+/// achica con la distancia junto con la figura en vez de quedar gigante de
+/// lejos. Son chicas porque tiene que leerse como paso, no como temblor.
+const SOMBRA_BALANCEO: f32 = 0.10; // del ancho
+const SOMBRA_BOB: f32 = 0.02;      // del alto
+/// Que franja de abajo hace de piernas, y cuanto se adelgaza la que va atras.
+/// En las poses intermedias las piernas van juntas y no merma ninguna.
+const SOMBRA_PIERNAS: f32 = 0.35;
+const SOMBRA_MERMA: f32 = 0.35;
+const PIERNA_FRAME: [f32; SPRITE_FRAMES] = [1.0, 0.0, -1.0, 0.0];
 
 fn color_de(ch: char) -> Color {
     match ch {
@@ -103,10 +127,14 @@ pub fn render_2d(dh: &mut RaylibDrawHandle<'_>, est: &Estado) {
         dh.draw_line_ex(Vector2::new(px, py), fin, grosor, color);
     }
 
-    let ex = ox as f32 + est.ex * bs as f32;
-    let ey = oy as f32 + est.ey * bs as f32;
-    dh.draw_circle_v(Vector2::new(ex, ey), bs as f32 * 0.5, Color { r: 120, g: 220, b: 90, a: 70 });
-    dh.draw_circle_v(Vector2::new(ex, ey), bs as f32 * 0.3, ENEMIGO);
+    // el enemigo solo cuando de verdad anda suelto, igual que en el minimapa y
+    // en render_sombra: apagada no se dibuja, si no la esquivas por reflejo
+    if est.persiguiendo {
+        let ex = ox as f32 + est.ex * bs as f32;
+        let ey = oy as f32 + est.ey * bs as f32;
+        dh.draw_circle_v(Vector2::new(ex, ey), bs as f32 * 0.5, Color { r: 120, g: 220, b: 90, a: 70 });
+        dh.draw_circle_v(Vector2::new(ex, ey), bs as f32 * 0.3, ENEMIGO);
+    }
 
     let centro = Vector2::new(px, py);
     dh.draw_circle_v(centro, bs as f32 * 0.42, Color { r: 255, g: 110, b: 199, a: 60 });
@@ -410,10 +438,18 @@ pub fn render_sombra(
     let dist_z = dist * rel.cos();
 
     let spr_col_t = ((cx / ANCHO as f32) - 0.5).abs() * 2.0;
-    let ff = fog_factor(dist, spr_col_t);
+    let ff = fog_factor(dist, spr_col_t).max(VIS_MIN_SOMBRA);
 
     // pulso sutil — "respira"
     let pulso = 0.85 + 0.15 * (est.anim_t * 3.0).sin();
+
+    // ---- caminado. Lo que se modula aca es la GEOMETRIA; el pulso de arriba
+    // es otra cosa (la opacidad) y sigue corriendo por su cuenta.
+    let frame = (est.anim_t * SPRITE_FPS) as usize % SPRITE_FRAMES;
+    // se corren el borde izquierdo y el techo: el resto del cuerpo cuelga de
+    // estos dos, asi que alcanza con moverlos para mover la figura entera
+    let izq = izq + BALANCEO_FRAME[frame] * tam_w * SOMBRA_BALANCEO;
+    let top = top + BOB_FRAME[frame] * tam_h * SOMBRA_BOB;
 
     let paso = ANCHO_ESTACA as f32;
     let n_cols = (tam_w / paso).ceil() as i32;
@@ -425,8 +461,13 @@ pub fn render_sombra(
         let col = (x as i32 / ANCHO_ESTACA) as usize;
         if col >= zbuffer.len() || zbuffer[col] <= dist_z { continue; }
 
+        // posicion horizontal dentro de la figura, con signo: negativo a la
+        // izquierda, positivo a la derecha. El fade usa el valor absoluto (que
+        // es lo que habia); el signo lo necesitan las piernas para saber de que
+        // lado esta esta columna.
+        let tx_firmado = (i as f32 + 0.5) / n_cols as f32 - 0.5;
         // fade horizontal: opaco al centro, transparente en bordes
-        let tx = ((i as f32 + 0.5) / n_cols as f32 - 0.5).abs() * 2.0;
+        let tx = tx_firmado.abs() * 2.0;
         let edge_x = (1.0 - tx * tx).clamp(0.0, 1.0);
 
         // tiras verticales para fade en el tope
@@ -437,7 +478,18 @@ pub fn render_sombra(
             let ty = ((y as f32 - top) / tam_h).clamp(0.0, 1.0);
             // el 20% superior se desvanece
             let edge_y = if ty < 0.2 { ty / 0.2 } else { 1.0 };
-            let alpha = (edge_x * edge_y * ff * pulso * 230.0) as u8;
+            // piernas: en la franja de abajo, la que queda atras en el paso se
+            // adelgaza. En las poses intermedias PIERNA_FRAME vale 0, el
+            // producto no es mayor que cero de ningun lado y no merma ninguna:
+            // ahi las dos piernas van juntas. Es sutil a proposito, de lejos se
+            // lee como paso y de cerca sigue siendo una mancha negra.
+            let pierna = if ty > 1.0 - SOMBRA_PIERNAS
+                && tx_firmado * PIERNA_FRAME[frame] > 0.0 {
+                1.0 - SOMBRA_MERMA
+            } else {
+                1.0
+            };
+            let alpha = (edge_x * edge_y * pierna * ff * pulso * 230.0) as u8;
 
             if y >= 0 && y < VIEW_H {
                 dh.draw_rectangle(
