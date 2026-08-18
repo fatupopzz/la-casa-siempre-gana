@@ -1248,10 +1248,18 @@ fn main() {
                     cred_vista += (objetivo - cred_vista) / T_CONTEO * dt;
                 }
 
-                // si la maquina esta adentro del laberinto, el sujeto sigue caminando
-                // mientras uno jala: cada giro cuesta tiempo real
+                // La sombra NO avanza mientras se juega a la maquina. Antes si, con
+                // la idea de que cada giro costara tiempo real, pero en la maquina el
+                // jugador no se puede mover: si la sombra venia cerca, era muerte
+                // segura y sin nada que hacer al respecto. Ahora se congela donde
+                // estaba y retoma desde ahi al salir.
+                //
+                // Los relojes SI siguen: correr_relojes() adelanta t_espera y anim_t.
+                // Si se saltara perseguir() a secas, una sombra que todavia no salio
+                // no se despertaria nunca mientras jugas, y el jugador podria quedarse
+                // en la maquina esperando a que se le pase el peligro.
                 if maquina_en_laberinto {
-                    est.perseguir(dt);
+                    est.correr_relojes(dt);
                     if est.atrapado {
                         frase_muerte = (est.anim_t * 1000.0) as usize % 5;
                         fundido.ir_a(Escena::Derrota);

@@ -155,7 +155,15 @@ impl Estado {
         }
     }
 
-    pub fn perseguir(&mut self, dt: f32) {
+    /// Adelanta los relojes del enemigo sin moverlo: la animacion, el contador
+    /// de recalculo del BFS y la espera de salida.
+    ///
+    /// Va SEPARADO del movimiento porque hay una escena, la maquina, donde el
+    /// tiempo tiene que seguir corriendo pero la sombra no puede avanzar. Si en
+    /// vez de esto se saltara perseguir() entera, se congelarian tambien
+    /// t_espera y anim_t: la sombra nunca terminaria de despertarse mientras
+    /// jugas al tragamonedas, y al salir arrancaria el contador de cero.
+    pub fn correr_relojes(&mut self, dt: f32) {
         self.anim_t += dt;
         self.t_recalc -= dt;
 
@@ -167,6 +175,15 @@ impl Estado {
                 self.persiguiendo = true;
             }
         }
+    }
+
+    /// Mueve a la sombra un paso hacia el jugador y cobra si lo alcanzo.
+    ///
+    /// Ojo: DIST_ATRAPA se chequea aca adentro, o sea que donde no se llama a
+    /// perseguir() tampoco se puede morir. Es justo lo que se busca en la
+    /// maquina, donde el jugador no se puede mover para esquivar.
+    pub fn perseguir(&mut self, dt: f32) {
+        self.correr_relojes(dt);
 
         if !self.persiguiendo { return; }
         if self.t_recalc <= 0.0 {
