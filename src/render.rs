@@ -24,6 +24,21 @@ const STEP_PISO: i32 = 2; // alto en px de cada tira draw_rectangle
 /// tenerla encima. Con el piso se ve venir por el pasillo, que es lo que te
 /// deja esquivarla en vez de comerte el susto.
 const VIS_MIN_SOMBRA: f32 = 0.55;
+// --- luz de la maquina ---
+// Es la unica fuente de luz del cuarto: no hay ambiente ni sol, todo lo demas
+// que se ve sale de la niebla y del brillo base de la textura.
+const LUZ_RADIO: f32 = 4.5;      // celdas hasta donde llega
+const LUZ_FUERZA: f32 = 0.85;    // cuanto se mezcla como maximo hacia el rosa
+const LUZ_COLOR: (u8, u8, u8) = (255, 110, 199); // el rosa neon del proyecto
+/// Brillo de una superficie a la que NO le llega la maquina. Es lo que abre el
+/// rango para que la luz se note como aclarado y no solo como tinte: sin esto
+/// el tint de una pared texturizada ya sale en 255 y no tiene para donde subir.
+///
+/// No es cero: a oscuras del todo el laberinto deja de leerse y no se puede
+/// jugar. 0.55 deja ver la geometria y aun asi da casi el doble de brillo al
+/// entrar al charco de luz.
+const LUZ_AMBIENTE: f32 = 0.55;
+
 // --- post-proceso de atmosfera ---
 // Van juntas y arriba porque se calibran de a una contra la escena entera: son
 // tres capas que se suman encima de todo y por separado ninguna se entiende.
@@ -116,6 +131,65 @@ fn niebla(c: Color, d: f32, col_t: f32) -> Color {
     }
 }
 
+/// Cuanta luz de maquina le llega al punto (px, py), de 0.0 a 1.0.
+///
+/// La caida es cuadratica y no lineal porque una lineal deja un borde visible
+/// justo en LUZ_RADIO: el ojo engancha el corte. Elevando al cuadrado la curva
+/// llega a cero con pendiente cero y el charco se desvanece sin canto.
+///
+/// Con varios focos se toma el MAXIMO y no la suma: sumando, dos maquinas
+/// cerca darian mas de 1.0 y el tramo entre las dos saldria blanco quemado.
+/// El maximo mantiene la escala y hace que cada una ilumine lo suyo.
+fn luz_maquina(px: f32, py: f32, focos: &[(f32, f32)]) -> f32 {
+    let mut mejor = 0.0f32;
+    for &(fx, fy) in focos {
+        let (dx, dy) = (px - fx, py - fy);
+        let d = (dx * dx + dy * dy).sqrt();
+        if d >= LUZ_RADIO {
+            continue;
+        }
+        let k = 1.0 - d / LUZ_RADIO;
+        let l = k * k;
+        if l > mejor {
+            mejor = l;
+        }
+    }
+    mejor
+}
+
+/// Factor de brillo de una superficie segun la luz que le llega: va de
+/// LUZ_AMBIENTE con l=0 hasta 1.0 con l=1.
+///
+/// `hay_luz` false es el mapa sin ninguna 'M'. Ahi devuelve 1.0 y no
+/// LUZ_AMBIENTE: sin fuente no hay a que estar en penumbra respecto de que, y
+/// oscurecer todo dejaria esos mapas peor que antes sin ningun motivo.
+fn brillo(l: f32, hay_luz: bool) -> f32 {
+    if !hay_luz {
+        return 1.0;
+    }
+    LUZ_AMBIENTE + (1.0 - LUZ_AMBIENTE) * l
+}
+
+/// Mezcla un tint hacia LUZ_COLOR segun `l`, que sale de luz_maquina().
+///
+/// Se llama SIEMPRE despues de aplicar brillo(): esta funcion solo corre el
+/// color hacia el rosa, el aclarado lo hace el factor de brillo. En ese orden
+/// la superficie iluminada sube de 55% a 100% y ademas se tine; al reves, el
+/// tinte se aplicaria sobre un valor que despues se atenua y la maquina
+/// quedaria rosa pero igual de apagada que el resto.
+fn tenir_luz(base: (u8, u8, u8), l: f32) -> (u8, u8, u8) {
+    if l <= 0.0 {
+        return base;
+    }
+    let k = (l * LUZ_FUERZA).clamp(0.0, 1.0);
+    let mezcla = |b: u8, luz: u8| (b as f32 + (luz as f32 - b as f32) * k) as u8;
+    (
+        mezcla(base.0, LUZ_COLOR.0),
+        mezcla(base.1, LUZ_COLOR.1),
+        mezcla(base.2, LUZ_COLOR.2),
+    )
+}
+
 /// factor de niebla de tunel (0.0 = fog total, 1.0 = visible)
 fn fog_factor(d: f32, col_t: f32) -> f32 {
     ((-FOG_DENSITY * d).exp() * (1.0 - col_t.powf(FOG_EDGE))).clamp(0.0, 1.0)
@@ -192,6 +266,30 @@ pub fn render_3d(
     // fondo fog — el piso texturizado se pinta encima
     dh.draw_rectangle(0, 0, ANCHO, VIEW_H, FOG);
 
+    // Los focos se juntan UNA vez por cuadro y no por estaca: escanear el grid
+    // adentro del bucle seria O(celdas) por columna. El Vec queda propio, asi
+    // que el prestamo de est.grid muere aca y no estorba al &mut de mas abajo.
+    //
+    // Sin ninguna 'M' el vector queda vacio y toda la luz se saltea: hay mapas
+    // sin maquina, y ahi el render tiene que quedar exactamente como estaba.
+    let focos: Vec<(f32, f32)> = est
+        .grid
+        .iter()
+        .enumerate()
+        .flat_map(|(r, fila)| {
+            fila.iter()
+                .enumerate()
+                .filter(|(_, ch)| **ch == 'M')
+                .map(move |(c, _)| (c as f32 + 0.5, r as f32 + 0.5))
+        })
+        .collect();
+    let hay_luz = !focos.is_empty();
+    // El techo va a ambiente PLANO, sin el termino de la maquina. La luz esta a
+    // la altura del piso: si el cielorraso tomara el mismo charco, terminaria
+    // mas claro que las paredes que lo sostienen y la escena se lee al reves,
+    // como si iluminara desde arriba.
+    let brillo_techo = if hay_luz { LUZ_AMBIENTE } else { 1.0 };
+
     let n = (ANCHO / ANCHO_ESTACA) as usize;
     let mut zbuffer = vec![MAX_DIST; n];
 
@@ -213,6 +311,21 @@ pub fn render_3d(
         let col_t = ((t - 0.5).abs() * 2.0).clamp(0.0, 1.0); // 0 centro, 1 borde
         let f_face: f32 = if imp.ch == '-' { 0.75 } else { 1.0 };
         let x = i as i32 * ANCHO_ESTACA;
+
+        // Luz que le llega a la pared golpeada. El punto de impacto se arma con
+        // imp.d, la distancia RADIAL, y NO con `d`: `d` ya viene multiplicada
+        // por cos(ang - est.a) para corregir el fisheye, y avanzar sobre el rayo
+        // con esa longitud deja el punto corto, cada vez mas corrido hacia el
+        // jugador a medida que la estaca se acerca al borde de la pantalla. La
+        // pared se iluminaria como si estuviera en otro lado.
+        let luz_pared = if hay_luz {
+            let hx = est.x + ang.cos() * imp.d;
+            let hy = est.y + ang.sin() * imp.d;
+            luz_maquina(hx, hy, &focos)
+        } else {
+            0.0
+        };
+        let brillo_pared = brillo(luz_pared, hay_luz);
 
         // ---- piso texturizado (floorcasting) ----
         if let Some(piso) = tex_piso {
@@ -237,13 +350,27 @@ pub fn render_3d(
                 let sy = (wy.rem_euclid(1.0) * ph).clamp(0.0, ph - 1.0);
                 let v = (255.0 * ff) as u8;
 
+                // el charco de luz sobre la alfombra. wx, wy ya son el punto
+                // del piso en coordenadas de mundo, asi que la luz sale de
+                // medir ese punto igual que la pared.
+                //
+                // El alpha se queda en v y no se tine: es el desvanecido de la
+                // niebla, no color. Teñirlo abriria el piso lejano de mas.
+                let l_piso = if hay_luz {
+                    luz_maquina(wx, wy, &focos)
+                } else {
+                    0.0
+                };
+                let vb = (v as f32 * brillo(l_piso, hay_luz)) as u8;
+                let (r, g, b) = tenir_luz((vb, vb, vb), l_piso);
+
                 dh.draw_texture_pro(
                     piso,
                     Rectangle::new(sx, sy, 1.0, 1.0),
                     Rectangle::new(x as f32, y as f32, ANCHO_ESTACA as f32, STEP_PISO as f32),
                     Vector2::zero(),
                     0.0,
-                    Color { r: v, g: v, b: v, a: v },
+                    Color { r, g, b, a: v },
                 );
 
                 y += STEP_PISO;
@@ -273,13 +400,16 @@ pub fn render_3d(
                 let sy = (wy.rem_euclid(1.0) * ch).clamp(0.0, ch - 1.0);
                 let v = (255.0 * ff) as u8;
 
+                // el alpha se queda en v, igual que en el piso: es el
+                // desvanecido de la niebla, no brillo
+                let vb = (v as f32 * brillo_techo) as u8;
                 dh.draw_texture_pro(
                     techo,
                     Rectangle::new(sx, sy, 1.0, 1.0),
                     Rectangle::new(x as f32, y as f32, ANCHO_ESTACA as f32, STEP_PISO as f32),
                     Vector2::zero(),
                     0.0,
-                    Color { r: v, g: v, b: v, a: v },
+                    Color { r: vb, g: vb, b: vb, a: v },
                 );
 
                 y -= STEP_PISO;
@@ -295,11 +425,13 @@ pub fn render_3d(
                 let tw = tex.width as f32;
                 let th = tex.height as f32;
                 let sx = (imp.tx * tw).clamp(0.0, tw - 1.0);
+                // La 'M' no se toca: es la fuente, ya trae su rosa propio y
+                // tenirla contra si misma solo la aplanaria.
                 let (tr, tg, tb) = if imp.ch == 'M' {
                     ((255.0 * f_face) as u8, (80.0 * f_face) as u8, (180.0 * f_face) as u8)
                 } else {
-                    let v = (255.0 * f_face) as u8;
-                    (v, v, v)
+                    let v = (255.0 * f_face * brillo_pared) as u8;
+                    tenir_luz((v, v, v), luz_pared)
                 };                
                 dh.draw_texture_pro(
                     tex,
@@ -330,7 +462,18 @@ pub fn render_3d(
                 };
                 let top = stake_top.max(0.0) as i32;
                 let bottom = stake_bottom.min(VIEW_H as f32) as i32;
-                let base_dim = sombrear(base, f_face);
+                // aca niebla() hace de overlay, asi que la luz va antes de
+                // llamarla: si no, la pared iluminada no se apagaria con la
+                // distancia y flotaria encima del fog
+                let base_dim = if imp.ch == 'M' {
+                    // la fuente va a brillo pleno y sin tenir: es de donde sale
+                    // la luz, atenuarla contra si misma no tiene sentido
+                    sombrear(base, f_face)
+                } else {
+                    let atenuado = sombrear(base, f_face * brillo_pared);
+                    let (r, g, b) = tenir_luz((atenuado.r, atenuado.g, atenuado.b), luz_pared);
+                    Color { r, g, b, a: atenuado.a }
+                };
                 dh.draw_rectangle(
                     x, top, ANCHO_ESTACA, (bottom - top).max(1),
                     niebla(base_dim, d, col_t),
