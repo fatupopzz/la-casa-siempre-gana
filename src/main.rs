@@ -1806,20 +1806,23 @@ fn main() {
                     escena = Escena::Bienvenida;
                 }
 
+                // Se centra sobre ALTO, no sobre VIEW_H: aca no hay franja de
+                // HUD, VIEW_H dejaba todo 20px arriba del centro real.
                 let cx = ANCHO / 2;
+                let cy = ALTO / 2;
                 let nombre = nombre_de(&inf, piso);
                 let mut dh = rl.begin_drawing(&thread);
                 dh.clear_background(Color { r: 0, g: 0, b: 0, a: 255 });
 
                 texto_vhs(&mut dh, &fuentes, "CUMPLISTE LA CUOTA", cx,
-                    VIEW_H / 2 - 96 + flota(tiempo, 1.4, 5.0), 52, DORADO, tiempo);
+                    cy - 96 + flota(tiempo, 1.4, 5.0), 52, DORADO, tiempo);
                 texto_centrado(&mut dh, &fuentes,
                     &format!("{}  -  {} de {} creditos", nombre, maq.creditos, maq.cuota),
-                    cx, VIEW_H / 2 - 12, 30, TEXTO);
+                    cx, cy - 12, 30, TEXTO);
                 texto_centrado(&mut dh, &fuentes, "te vas caminando, no corriendo",
-                    cx, VIEW_H / 2 + 36, 26, CYAN);
+                    cx, cy + 36, 26, CYAN);
                 texto_glow_centrado(&mut dh, &fuentes, "R   volver al menu", cx,
-                    VIEW_H / 2 + 116 + flota(tiempo, 2.4, 2.0), 28, NEON);
+                    cy + 116 + flota(tiempo, 2.4, 2.0), 28, NEON);
 
                 vineta(&mut dh, VINETA_BIENVENIDA.0, VINETA_BIENVENIDA.1);
                 grano(&mut dh);
