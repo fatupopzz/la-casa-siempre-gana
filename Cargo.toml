@@ -2,6 +2,10 @@
 name = "maze-runner"
 version = "0.1.0"
 edition = "2021"
+# desde que existe src/bin/gen.rs hay dos binarios y `cargo run` a secas no
+# sabia cual arrancar. El juego es el default; el generador se pide a mano con
+# `cargo run --bin gen`.
+default-run = "maze-runner"
 
 [dependencies]
 raylib = "5.0"

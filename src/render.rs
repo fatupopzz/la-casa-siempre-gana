@@ -150,9 +150,12 @@ pub fn render_2d(dh: &mut RaylibDrawHandle<'_>, est: &Estado) {
     );
 }
 
+/// Toma `est` por &mut porque tirar los rayos es tambien lo que revela el
+/// minimapa: las celdas que atraviesa cada rayo se marcan en est.revelado sobre
+/// la misma pasada. Es la unica escritura que hace el render.
 pub fn render_3d(
     dh: &mut RaylibDrawHandle<'_>,
-    est: &Estado,
+    est: &mut Estado,
     texturas: &[Option<Texture2D>],
     tex_piso: Option<&Texture2D>,
     tex_techo: Option<&Texture2D>,
@@ -171,7 +174,8 @@ pub fn render_3d(
     for (i, z) in zbuffer.iter_mut().enumerate() {
         let t = i as f32 / n as f32;
         let ang = est.a - FOV / 2.0 + FOV * t;
-        let imp = lanzar_dda(&est.grid, est.x, est.y, ang);
+        // el mismo rayo que dibuja la estaca revela lo que toca en el minimapa
+        let imp = est.revelar_rayo(ang);
 
         let d = (imp.d * (ang - est.a).cos()).max(0.05);
         *z = d;
@@ -320,8 +324,15 @@ pub fn render_minimapa(dh: &mut RaylibDrawHandle<'_>, est: &Estado) {
 
     dh.draw_rectangle(ox - 6, oy - 6, w + 12, h + 12, Color { r: 12, g: 5, b: 24, a: 200 });
 
+    // fog of war: lo no revelado no se dibuja y queda del fondo del panel, que
+    // es el color del vacio. No se pinta de negro aparte a proposito — el
+    // rectangulo de atras ya es ese color, y asi el mapa se va "abriendo"
+    // encima en vez de dibujarse dos veces.
     for (r, fila) in est.grid.iter().enumerate() {
         for (c, ch) in fila.iter().enumerate() {
+            if !est.visto(c as i32, r as i32) {
+                continue;
+            }
             let col = color_de(*ch);
             dh.draw_rectangle(ox + c as i32 * bs, oy + r as i32 * bs, bs, bs, col);
         }

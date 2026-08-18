@@ -1,6 +1,7 @@
 // estado.rs — estado del juego, movimiento del jugador, perseguidor
 
-use crate::mapa::{cargar, buscar, char_en, libre, campo_desde};
+use crate::mapa::{cargar, buscar, char_en, libre, campo_desde, desde_texto};
+use crate::raycast::{lanzar_dda_visitando, Impacto};
 
 // La sombra sale EN LA SALIDA y arranca a venir hacia vos de una. Suena raro
 // que nazca en la meta, pero es al reves de lo que parece: como te persigue,
@@ -28,6 +29,14 @@ pub struct Estado {
     /// segundos que faltan para que la sombra salga. Solo lo usa la entrada
     /// voluntaria al laberinto; en la forzada arranca en 0 y no hace nada.
     pub t_espera: f32,
+    /// Fog of war del minimapa: que celdas ya vio el jugador. Plano y
+    /// row-major, `fila * cols + col`, igual que `campo`.
+    ///
+    /// No se resetea a mano en ningun lado y no hace falta: cada piso y cada
+    /// reinicio construyen un Estado nuevo por nuevo(), asi que el revelado
+    /// arranca en false junto con el resto. Si alguna vez se recicla el Estado
+    /// en vez de reconstruirlo, esto hay que limpiarlo ahi.
+    pub revelado: Vec<bool>,
 }
 
 impl Estado {
@@ -35,11 +44,21 @@ impl Estado {
     /// va como parametro para que no exista un default global que se pueda
     /// quedar viejo. Hoy es MENOR que la del jugador, a proposito.
     pub fn nuevo(path: &str, vel_enemigo: f32) -> Self {
-        let grid = cargar(path);
+        Self::desde_grid(cargar(path), vel_enemigo)
+    }
+
+    /// Igual que nuevo() pero desde el texto del mapa en vez de un archivo: lo
+    /// usa el modo infinito, que genera cada piso en runtime.
+    pub fn de_texto(txt: &str, vel_enemigo: f32) -> Self {
+        Self::desde_grid(desde_texto(txt), vel_enemigo)
+    }
+
+    fn desde_grid(grid: Vec<Vec<char>>, vel_enemigo: f32) -> Self {
         let (pr, pc) = buscar(&grid, 'A').expect("el maze.txt no tiene 'A'");
         let campo = campo_desde(&grid, pr, pc);
         // arranca en la salida; si el mapa no tiene 'B' cae en la entrada
         let (er, ec) = buscar(&grid, 'B').unwrap_or((pr, pc));
+        let celdas = grid.len() * grid[0].len();
 
         Estado {
             grid,
@@ -57,6 +76,7 @@ impl Estado {
             persiguiendo: false,
             vel_enemigo,
             t_espera: 0.0,
+            revelado: vec![false; celdas],
         }
     }
 
@@ -70,6 +90,57 @@ impl Estado {
 
     pub fn dist_enemigo(&self) -> f32 {
         ((self.ex - self.x).powi(2) + (self.ey - self.y).powi(2)).sqrt()
+    }
+
+    /// Revela la celda que el jugador esta pisando. Se llama por frame y no
+    /// desde avanzar(): avanzar() solo corre si hay tecla apretada, asi que la
+    /// celda de arranque no se revelaria hasta dar el primer paso.
+    pub fn revelar_jugador(&mut self) {
+        self.revelar_celda(self.x as i32, self.y as i32);
+    }
+
+    /// Tira un rayo y revela TODAS las celdas que atraviesa, no solo la pared
+    /// donde termina: asi el minimapa muestra lo que el jugador ve y no nada
+    /// mas lo que piso. Devuelve el mismo Impacto que lanzar_dda() para que
+    /// render_3d dibuje la estaca con esta misma pasada, sin tirar el rayo dos
+    /// veces.
+    ///
+    /// Vive aca y no en render.rs por el prestamo: el cierre necesita
+    /// `&mut self.revelado` mientras el DDA lee `&self.grid`. Desde adentro se
+    /// desestructura y los dos campos salen por separado; desde afuera, un
+    /// est.revelar_celda() dentro del cierre tomaria el struct entero y
+    /// chocaria con el &est.grid del mismo llamado.
+    pub fn revelar_rayo(&mut self, ang: f32) -> Impacto {
+        let (cols, filas) = (self.cols(), self.filas());
+        let (x, y) = (self.x, self.y);
+        let Estado { grid, revelado, .. } = self;
+
+        lanzar_dda_visitando(grid, x, y, ang, |cx, cy| {
+            if cx >= 0 && cy >= 0 && cx < cols && cy < filas {
+                revelado[(cy * cols + cx) as usize] = true;
+            }
+        })
+    }
+
+    /// El rayo puede salirse del mapa (char_en() devuelve '+' afuera y ahi
+    /// corta), asi que la celda llega sin garantia de estar adentro y el
+    /// chequeo de rango va aca, en un solo lugar.
+    fn revelar_celda(&mut self, cx: i32, cy: i32) {
+        let (cols, filas) = (self.cols(), self.filas());
+        if cx >= 0 && cy >= 0 && cx < cols && cy < filas {
+            self.revelado[(cy * cols + cx) as usize] = true;
+        }
+    }
+
+    /// Si la celda (col, fila) ya se vio. Fuera del mapa devuelve false, que es
+    /// lo que espera el minimapa: lo que no existe tampoco se dibuja.
+    pub fn visto(&self, cx: i32, cy: i32) -> bool {
+        let (cols, filas) = (self.cols(), self.filas());
+        cx >= 0
+            && cy >= 0
+            && cx < cols
+            && cy < filas
+            && self.revelado[(cy * cols + cx) as usize]
     }
 
     pub fn avanzar(&mut self, dx: f32, dy: f32) {

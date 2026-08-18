@@ -7,6 +7,7 @@ mod render;
 mod juego;
 mod maquina;
 mod audio;
+mod gen;
 use audio::Audio;
 use maquina::{AnimRodillos, FaseRodillos, Maquina, Palanca, Simbolo, N_SIMBOLOS};
 use mapa::hay_adyacente;
@@ -70,7 +71,7 @@ struct ConfigPiso {
 // Motivo: los pasillos miden una celda y DIST_ATRAPA es 0.5, asi que no se le
 // puede pasar por al lado. Con la sombra mas rapida, cruzartela de frente era
 // muerte segura sin importar como jugaras. Ahora podes retroceder y buscar otra
-// rama. Le sacas 1.0 / 0.75 / 0.5 por segundo, que es el margen para perderte:
+// rama. Le sacas 1.3 / 1.05 / 0.8 por segundo, que es el margen para perderte:
 // el jugador promedio no encuentra la ruta buena a la primera y necesita poder
 // equivocarse de pasillo sin que eso sea la muerte.
 //
@@ -83,7 +84,7 @@ const PISOS: [ConfigPiso; 3] = [
         mapa: "mapas/piso1.txt",
         cuota: 65,
         giros: 20,
-        vel_enemigo: 2.2,
+        vel_enemigo: 1.9,
         dist_alerta: 4.5,
     },
     ConfigPiso {
@@ -91,7 +92,7 @@ const PISOS: [ConfigPiso; 3] = [
         mapa: "mapas/piso2.txt",
         cuota: 70,
         giros: 16,
-        vel_enemigo: 2.45,
+        vel_enemigo: 2.15,
         dist_alerta: 4.0,
     },
     ConfigPiso {
@@ -104,7 +105,7 @@ const PISOS: [ConfigPiso; 3] = [
         // NO pasa el chequeo p75: la monotonia se eligio por encima de eso.
         cuota: 55,
         giros: 12,
-        vel_enemigo: 2.7,
+        vel_enemigo: 2.4,
         dist_alerta: 3.5,
     },
 ];
@@ -120,10 +121,23 @@ const PISOS: [ConfigPiso; 3] = [
 const RETRASO_SOMBRA: f32 = 0.0;
 const VENTAJA_RETRASO: f32 = 1.5; // lo que suma entrar por decision propia
 const VENTAJA_VEL: f32 = 0.15;    // cuanto mas lenta va la sombra
-/// Piso duro: por mas ventaja que tenga, la sombra nunca baja de aca. Con las
-/// velocidades nuevas el piso 1 (3.45) menos la ventaja daba 3.15, o sea MAS
-/// LENTA que el jugador, y ahi si se le escapaba corriendo en linea recta.
-const VEL_SOMBRA_MIN: f32 = VEL + 0.15;
+/// Piso duro: por mas ventaja que tenga, la sombra nunca baja de aca.
+///
+/// OJO, esto valia VEL + 0.15 (3.35) de cuando las velocidades rondaban 3.45 y
+/// la ventaja podia dejarla mas lenta que el jugador. Con las velocidades de
+/// hoy (1.9 / 2.15 / 2.4, todas DEBAJO de VEL) ese piso quedaba ARRIBA de la
+/// velocidad base, asi que el .max() lo aplicaba siempre y salir por decision
+/// propia ponia la sombra en 3.35 — mas rapida que el jugador y mucho mas
+/// rapida que si te tiraban adentro. La "ventaja" era en realidad un castigo.
+///
+/// Ahora es un piso absoluto y bajo: nunca llega a aplicarse con las
+/// velocidades actuales, y esta solo para que un ConfigPiso muy lento no deje
+/// una sombra que no camina.
+const VEL_SOMBRA_MIN: f32 = 1.2;
+/// Techo del modo infinito. La sombra escala piso a piso pero nunca llega a
+/// VEL: si igualara al jugador, correr en linea recta dejaria de ser una
+/// salida y el modo se volveria imposible en vez de dificil.
+const VEL_SOMBRA_MAX_INF: f32 = VEL - 0.1;
 
 /// arranca el laberinto de un piso: su mapa, la sombra suelta y a la velocidad
 /// que le toca. Todo sale del ConfigPiso, no hay consts de por medio.
@@ -131,12 +145,34 @@ const VEL_SOMBRA_MIN: f32 = VEL + 0.15;
 /// `voluntario` = el jugador eligio salir en vez de quemar los giros. Se lleva
 /// unos segundos antes de que la sombra salga y la sombra va algo mas lenta.
 fn entrar_al_laberinto(cfg: &ConfigPiso, voluntario: bool) -> Estado {
-    let vel = if voluntario {
-        (cfg.vel_enemigo - VENTAJA_VEL).max(VEL_SOMBRA_MIN)
+    preparar_entrada(
+        Estado::nuevo(cfg.mapa, vel_de_entrada(cfg.vel_enemigo, voluntario)),
+        voluntario,
+    )
+}
+
+/// Lo mismo pero para un piso del modo infinito, cuyo mapa se genero en runtime
+/// y no vive en ningun archivo.
+fn entrar_generado(inf: &Infinito, voluntario: bool) -> Estado {
+    preparar_entrada(
+        Estado::de_texto(&inf.mapa, vel_de_entrada(inf.vel_enemigo, voluntario)),
+        voluntario,
+    )
+}
+
+/// La ventaja por entrar por decision propia nunca puede dejar a la sombra MAS
+/// RAPIDA que si no la hubieras tenido: por eso el piso duro se capa contra la
+/// velocidad base en vez de aplicarse tal cual. Sin ese min(), un piso con base
+/// por debajo de VEL_SOMBRA_MIN sale acelerado justo cuando elegis correr.
+fn vel_de_entrada(base: f32, voluntario: bool) -> f32 {
+    if voluntario {
+        (base - VENTAJA_VEL).max(VEL_SOMBRA_MIN.min(base))
     } else {
-        cfg.vel_enemigo
-    };
-    let mut est = Estado::nuevo(cfg.mapa, vel);
+        base
+    }
+}
+
+fn preparar_entrada(mut est: Estado, voluntario: bool) -> Estado {
     est.modo3d = true;
     // La sombra sale por la puerta por la que entraste, no aparece adelante.
     // Hasta que salga no persigue ni te ciega; el que se queda quieto la ve
@@ -150,6 +186,104 @@ fn entrar_al_laberinto(cfg: &ConfigPiso, voluntario: bool) -> Estado {
     // nunca la despierta y la sombra se queda clavada en la salida
     est.persiguiendo = est.t_espera <= 0.0;
     est
+}
+
+// ============================================================ MODO INFINITO
+
+/// Indice de la opcion "Infinito" en la fila de la bienvenida: va despues de
+/// los tres pisos fijos. `piso` puede valer esto, asi que NADIE debe indexar
+/// PISOS con `piso` a secas — para eso estan cuota_de() y compania.
+const INFINITO: usize = PISOS.len();
+
+/// Piso base del modo infinito. ~20x20 de grid sale de 10 celdas: el generador
+/// da 2*celdas+1 por lado, o sea 21x21.
+const INF_CELDAS: usize = 10;
+/// Cuanto crece el laberinto por piso, EN CELDAS. El pedido era +5 filas y
+/// columnas de grid, pero el grid siempre mide 2*celdas+1: solo puede crecer de
+/// a 2. +2 celdas = +4 de grid, que es el escalon valido mas cercano a 5 por
+/// abajo. Si se quiere el otro lado del redondeo, aca va un 3 (+6 de grid).
+const INF_CRECE_CELDAS: usize = 2;
+const INF_CUOTA_EXTRA: i32 = 10;
+const INF_VEL_EXTRA: f32 = 0.15;
+
+/// Un piso del modo infinito. Es lo que en los pisos fijos hace ConfigPiso,
+/// salvo que el mapa es texto generado en vez de una ruta a un .txt, y que los
+/// numeros salen de escalar el piso anterior en vez de estar escritos a mano.
+struct Infinito {
+    /// numero de piso, 1-based, el que se muestra en el HUD
+    n: i32,
+    celdas: usize,
+    cuota: i32,
+    giros: i32,
+    vel_enemigo: f32,
+    dist_alerta: f32,
+    mapa: String,
+}
+
+impl Infinito {
+    /// El primer piso arranca con la cuota y los giros del piso 1 fijo: la
+    /// entrada al modo tiene que sentirse igual de dura que empezar el juego,
+    /// la rampa viene despues.
+    fn primero() -> Self {
+        Infinito {
+            n: 1,
+            celdas: INF_CELDAS,
+            cuota: PISOS[0].cuota,
+            giros: PISOS[0].giros,
+            vel_enemigo: PISOS[0].vel_enemigo,
+            dist_alerta: PISOS[0].dist_alerta,
+            mapa: gen::generar(INF_CELDAS, INF_CELDAS, 2),
+        }
+    }
+
+    /// El piso siguiente: mas grande, mas caro y con la sombra mas rapida.
+    ///
+    /// La velocidad se capa contra VEL_SOMBRA_MAX_INF y no crece mas alla, asi
+    /// que a partir de cierto piso lo unico que sigue escalando es el tamano
+    /// del laberinto. Es a proposito: una sombra mas rapida que el jugador hace
+    /// el modo imposible, un laberinto mas grande solo lo hace mas largo.
+    ///
+    /// Los giros NO escalan. Con la cuota subiendo +10 por piso, la maquina se
+    /// vuelve inalcanzable sola y el modo se apoya en escaparse del laberinto,
+    /// que es el bucle que de verdad se puede sostener para siempre.
+    fn siguiente(&self) -> Self {
+        let celdas = self.celdas + INF_CRECE_CELDAS;
+        Infinito {
+            n: self.n + 1,
+            celdas,
+            cuota: self.cuota + INF_CUOTA_EXTRA,
+            giros: self.giros,
+            vel_enemigo: (self.vel_enemigo + INF_VEL_EXTRA).min(VEL_SOMBRA_MAX_INF),
+            dist_alerta: self.dist_alerta,
+            mapa: gen::generar(celdas, celdas, 2),
+        }
+    }
+
+    fn nombre(&self) -> String {
+        format!("PISO {}", self.n)
+    }
+}
+
+// Los cuatro de abajo son el unico camino permitido para leer los parametros
+// del piso que se esta jugando: en modo infinito salen de Infinito y en los
+// pisos fijos de PISOS, y asi ningun call site tiene que acordarse de cual es.
+
+fn cuota_de(inf: &Option<Infinito>, piso: usize) -> i32 {
+    inf.as_ref().map_or_else(|| PISOS[piso].cuota, |i| i.cuota)
+}
+
+fn giros_de(inf: &Option<Infinito>, piso: usize) -> i32 {
+    inf.as_ref().map_or_else(|| PISOS[piso].giros, |i| i.giros)
+}
+
+fn alerta_de(inf: &Option<Infinito>, piso: usize) -> f32 {
+    inf.as_ref()
+        .map_or_else(|| PISOS[piso].dist_alerta, |i| i.dist_alerta)
+}
+
+fn nombre_de(inf: &Option<Infinito>, piso: usize) -> String {
+    inf.as_ref()
+        .map_or_else(|| PISOS[piso].nombre.to_string(), |i| i.nombre())
 }
 
 /// cuantos rodillos ya frenaron, leyendo solo la fase. Vive aca y no en
@@ -330,7 +464,12 @@ const PLACA_W: f32 = 400.0; // celda del spritesheet
 const PLACA_H: f32 = 160.0;
 const PLACA_RATIO: f32 = 2.5;   // 400 / 160, de aca sale el alto destino
 // van en una linea horizontal, que es como se navega con A/D
+// misma hoja pero de una sola fila (800x160): la placa del modo infinito
+const RUTA_PLACA_INF: &str = "assets/sprites/placa_infinito.png";
 const PLACA_ANCHO: f32 = 0.28;  // fraccion de ANCHO -> 269x108
+/// Cuanto de la pantalla puede ocupar la fila de placas sumada. Lo que sobra se
+/// reparte como huecos, contando tambien los dos de las puntas.
+const FILA_UTIL: f32 = 0.88;
 const PLACAS_Y: f32 = 0.655;    // tope de la fila, fraccion de ALTO
 const PLACA_BORDE: f32 = 0.0028;// grosor del borde, solo para el fallback
 const TAM_PLACA: f32 = 0.042;   // tamano del nombre, solo para el fallback
@@ -729,6 +868,15 @@ fn main() {
         ),
     }
 
+    let placa_inf = rl.load_texture(&thread, RUTA_PLACA_INF).ok();
+    match &placa_inf {
+        Some(tex) => tex.set_texture_filter(&thread, TextureFilter::TEXTURE_FILTER_POINT),
+        None => eprintln!(
+            "aviso: no encontre {}, la placa del infinito va dibujada con rects",
+            RUTA_PLACA_INF
+        ),
+    }
+
     let fuentes = if std::path::Path::new(RUTA_FUENTE).exists() {
         Fuentes {
             grande: rl.load_font_ex(&thread, RUTA_FUENTE, 64, None).ok(),
@@ -754,7 +902,17 @@ fn main() {
     let mut escena = Escena::Bienvenida;
     let mut est = Estado::nuevo(PISOS[0].mapa, PISOS[0].vel_enemigo);
     let mut usar_tex = true;
+    // indice de la opcion elegida: 0..2 son los pisos fijos, INFINITO es la cuarta
     let mut piso: usize = 0;
+    // Some(..) = se esta jugando el modo infinito. Lo fija cada ENTER de la
+    // bienvenida, a Some o a None segun que placa estuviera elegida, asi que
+    // vale para toda la partida. Mientras es Some, los parametros del piso
+    // salen de aca y no de PISOS: ese es el invariante que deja que `piso`
+    // valga INFINITO sin que nadie indexe PISOS fuera de rango.
+    let mut inf: Option<Infinito> = None;
+    // lo prende la transicion que cierra un piso del modo infinito, y se
+    // atiende cuando el velo llega a negro. Ver el bloque de abajo.
+    let mut avanzar_infinito = false;
     let mut frase_muerte: usize = 0;
     let mut maq = Maquina::nueva(PISOS[0].cuota, PISOS[0].giros);
     let mut anim = AnimRodillos::nueva();
@@ -781,34 +939,68 @@ fn main() {
         // el cambio de escena recien pasa cuando el velo llego a negro
         if let Some(e) = fundido.actualizar(dt) {
             escena = e;
+
+            // ---- cierre de piso del modo infinito
+            // Justo aca y no al pedir la transicion: mientras el velo cierra,
+            // la escena vieja se sigue dibujando, y si el piso ya hubiera
+            // avanzado el HUD cantaria el numero nuevo con el jugador todavia
+            // parado en el laberinto anterior. Con la pantalla en negro no se
+            // ve nada de eso, y ademas es el momento natural para pagar la
+            // generacion del laberinto, que es lo mas caro del pase.
+            //
+            // Deja la partida como recien entrada: maquina nueva, sin cuota
+            // pagada y sin arrastrar de donde se venia.
+            if avanzar_infinito {
+                avanzar_infinito = false;
+                if let Some(actual) = &inf {
+                    let sig = actual.siguiente();
+                    maq = Maquina::nueva(sig.cuota, sig.giros);
+                    inf = Some(sig);
+                    anim = AnimRodillos::nueva();
+                    maquina_en_laberinto = false;
+                    salio_voluntario = false;
+                    pago_cuota = false;
+                    cred_vista = 0.0;
+                }
+            }
         }
         match escena {
             // ============================================ BIENVENIDA
             Escena::Bienvenida => {
                 audio.bienvenida();
 
-                // la seleccion mueve `piso`, que es el indice de PISOS: de ahi
-                // sale el mapa, la cuota, los giros y la sombra
-                let n_pisos = PISOS.len();
+                // la seleccion mueve `piso`: 0..2 son los indices de PISOS y la
+                // cuarta es INFINITO, que no tiene entrada en PISOS y de ahi
+                // que la fila se recorra hasta n_opciones y no hasta PISOS.len()
+                let n_opciones = PISOS.len() + 1;
                 if rl.is_key_pressed(KeyboardKey::KEY_A) || rl.is_key_pressed(KeyboardKey::KEY_LEFT)
                     || boton(&rl, GamepadButton::GAMEPAD_BUTTON_LEFT_FACE_LEFT) {
-                    piso = (piso + n_pisos - 1) % n_pisos;
+                    piso = (piso + n_opciones - 1) % n_opciones;
                 }
                 if rl.is_key_pressed(KeyboardKey::KEY_D) || rl.is_key_pressed(KeyboardKey::KEY_RIGHT)
                     || boton(&rl, GamepadButton::GAMEPAD_BUTTON_LEFT_FACE_RIGHT) {
-                    piso = (piso + 1) % n_pisos;
+                    piso = (piso + 1) % n_opciones;
                 }
                 // atajo por numero, como estaba antes
                 if rl.is_key_pressed(KeyboardKey::KEY_ONE) { piso = 0; }
                 if rl.is_key_pressed(KeyboardKey::KEY_TWO) { piso = 1; }
                 if rl.is_key_pressed(KeyboardKey::KEY_THREE) { piso = 2; }
+                if rl.is_key_pressed(KeyboardKey::KEY_FOUR) { piso = INFINITO; }
 
                 if !fundido.en_curso()
                     && (rl.is_key_pressed(KeyboardKey::KEY_ENTER) || rl.is_key_pressed(KeyboardKey::KEY_SPACE)
                         || boton(&rl, GamepadButton::GAMEPAD_BUTTON_RIGHT_FACE_RIGHT)) {
+                    // se fija en cada entrada, no solo al elegir infinito: si
+                    // se vuelve al menu despues de una partida infinita, elegir
+                    // un piso fijo tiene que apagarlo. El primer laberinto se
+                    // genera aca mismo, en el frame que arranca el fundido.
+                    inf = if piso == INFINITO {
+                        Some(Infinito::primero())
+                    } else {
+                        None
+                    };
                     // se arranca en la maquina, el laberinto recien si falla la cuota
-                    let cfg = PISOS[piso];
-                    maq = Maquina::nueva(cfg.cuota, cfg.giros);
+                    maq = Maquina::nueva(cuota_de(&inf, piso), giros_de(&inf, piso));
                     anim = AnimRodillos::nueva();
                     maquina_en_laberinto = false;
                     salio_voluntario = false;
@@ -905,18 +1097,36 @@ fn main() {
                 // el alto se calcula, no se escribe: ancho / 2.5. Los huecos se
                 // reparten parejo a los costados y entre placas, asi la fila
                 // coincide con como se navega (A/D, izquierda a derecha).
-                let pw = ANCHO as f32 * PLACA_ANCHO;
+                // Con la cuarta placa la fila ya no entra a PLACA_ANCHO cada
+                // una (4 x 0.28 = 1.12 de pantalla), asi que el ancho es el
+                // menor entre el de siempre y lo que deja FILA_UTIL repartido.
+                // Con tres opciones gana PLACA_ANCHO y la fila queda igual que
+                // antes; es la cuarta la que obliga a achicar.
+                let n_opciones = PISOS.len() + 1;
+                let pw = (ANCHO as f32 * PLACA_ANCHO)
+                    .min(ANCHO as f32 * FILA_UTIL / n_opciones as f32);
                 let ph = pw / PLACA_RATIO;
-                let hueco_p = (ANCHO as f32 - pw * PISOS.len() as f32) / (PISOS.len() + 1) as f32;
+                let hueco_p = (ANCHO as f32 - pw * n_opciones as f32) / (n_opciones + 1) as f32;
                 let py0 = ALTO as f32 * PLACAS_Y;
                 let pulso = 0.85 + 0.15 * (tiempo * 3.2).sin();
                 let tam_placa = (ALTO as f32 * TAM_PLACA) as i32;
 
-                for (i, cfg) in PISOS.iter().enumerate() {
+                for i in 0..n_opciones {
                     let placa = Rectangle::new(hueco_p + (pw + hueco_p) * i as f32, py0, pw, ph);
                     let elegida = i == piso;
+                    // el infinito tiene su propio png de una sola fila; los
+                    // pisos van por su fila dentro de placas.png
+                    let (hoja, fila_hoja) = if i == INFINITO {
+                        (&placa_inf, 0.0)
+                    } else {
+                        (&placas, i as f32)
+                    };
+                    // por get() y no por PISOS[i]: la cuarta opcion no tiene
+                    // ConfigPiso, y quedarse corto en la fila es justo el caso
+                    // del infinito, no un error
+                    let nombre = PISOS.get(i).map_or("INFINITO", |c| c.nombre);
 
-                    match &placas {
+                    match hoja {
                         Some(tex) => {
                             // columna 0 = apagada, columna 1 = encendida
                             let col = if elegida { 1.0 } else { 0.0 };
@@ -927,7 +1137,7 @@ fn main() {
                             };
                             dh.draw_texture_pro(
                                 tex,
-                                Rectangle::new(col * PLACA_W, i as f32 * PLACA_H, PLACA_W, PLACA_H),
+                                Rectangle::new(col * PLACA_W, fila_hoja * PLACA_H, PLACA_W, PLACA_H),
                                 placa,
                                 Vector2::zero(), 0.0, tinte,
                             );
@@ -943,10 +1153,10 @@ fn main() {
                             dh.draw_rectangle_rec(placa, relleno);
                             dh.draw_rectangle_lines_ex(placa, ANCHO as f32 * PLACA_BORDE, borde);
 
-                            let (tx, ty, tt) = ajustar_centrado(&dh, &fuentes, cfg.nombre,
+                            let (tx, ty, tt) = ajustar_centrado(&dh, &fuentes, nombre,
                                 placa.x + placa.width / 2.0, placa.y + placa.height / 2.0,
                                 tam_placa, placa.width * 0.8);
-                            dibujar_texto(&mut dh, &fuentes, cfg.nombre, tx, ty, tt, tinta);
+                            dibujar_texto(&mut dh, &fuentes, nombre, tx, ty, tt, tinta);
                         }
                     }
                 }
@@ -958,10 +1168,20 @@ fn main() {
                 // Va DESPUES de la vineta: al bajar la marquesina estas dos
                 // lineas quedaron dentro de la banda oscura de abajo y no se
                 // leian. Son HUD, no escena, asi que no las tapa.
-                let cfg = PISOS[piso];
+                // el infinito todavia no existe como Infinito cuando esta nada
+                // mas elegido, asi que la letra chica muestra con que arranca:
+                // los mismos numeros que le pone Infinito::primero()
                 let chico = (ALTO as f32 * TAM_CHICO) as i32;
-                texto_centrado(&mut dh, &fuentes,
-                    &format!("cuota {}  -  {} giros", cfg.cuota, cfg.giros),
+                let linea = if piso == INFINITO {
+                    format!(
+                        "cuota {}  -  {} giros  -  cada piso: +{} de cuota y un laberinto mas grande",
+                        PISOS[0].cuota, PISOS[0].giros, INF_CUOTA_EXTRA
+                    )
+                } else {
+                    let cfg = PISOS[piso];
+                    format!("cuota {}  -  {} giros", cfg.cuota, cfg.giros)
+                };
+                texto_centrado(&mut dh, &fuentes, &linea,
                     cx, (ALTO as f32 * INFO_Y) as i32, chico, LATON);
                 texto_centrado(&mut dh, &fuentes, "A D  o  flechas   elegir piso        ENTER  entrar",
                     cx, (ALTO as f32 * CONTROLES_Y) as i32, chico, LATON_TENUE);
@@ -1043,7 +1263,10 @@ fn main() {
                         || boton(&rl, GamepadButton::GAMEPAD_BUTTON_RIGHT_FACE_RIGHT)) {
                     if !maquina_en_laberinto {
                         // se va por su cuenta: se lleva la ventaja
-                        est = entrar_al_laberinto(&PISOS[piso], true);
+                        est = match &inf {
+                            Some(i) => entrar_generado(i, true),
+                            None => entrar_al_laberinto(&PISOS[piso], true),
+                        };
                         salio_voluntario = true;
                     }
                     fundido.ir_a(Escena::Jugando);
@@ -1062,6 +1285,11 @@ fn main() {
                             est.t_espera = 0.0;
                             pago_cuota = true;
                             fundido.ir_a(Escena::Jugando);
+                        } else if inf.is_some() {
+                            // en infinito pagar la cuota no cierra la partida:
+                            // ese piso quedo saldado y se pasa al siguiente
+                            avanzar_infinito = true;
+                            fundido.ir_a(Escena::Maquina);
                         } else {
                             // pego la cuota sin haber entrado: se cierra en verde
                             fundido.ir_a(Escena::Exito);
@@ -1071,7 +1299,10 @@ fn main() {
                         audio.fallo();
                         if !maquina_en_laberinto {
                             // lo tiran adentro: sin ventaja, la sombra ya salio
-                            est = entrar_al_laberinto(&PISOS[piso], false);
+                            est = match &inf {
+                                Some(i) => entrar_generado(i, false),
+                                None => entrar_al_laberinto(&PISOS[piso], false),
+                            };
                             salio_voluntario = false;
                             // corte seco de la musica y un rato en negro antes
                             // del laberinto: se acabo la fiesta
@@ -1257,7 +1488,11 @@ fn main() {
                 }
 
                 // ---- HUD, siempre afuera del gabinete
-                dibujar_texto(&mut dh, &fuentes, &format!("RONDA {} DE {}", piso + 1, PISOS.len()),
+                let rotulo = match &inf {
+                    Some(i) => format!("PISO {}", i.n),
+                    None => format!("RONDA {} DE {}", piso + 1, PISOS.len()),
+                };
+                dibujar_texto(&mut dh, &fuentes, &rotulo,
                     MARGEN_HUD, MARGEN_HUD, 26, TEXTO);
                 // mientras el contador sube se pinta del color del pago
                 let contando = (cred_vista - cred_objetivo as f32).abs() >= 0.5;
@@ -1307,7 +1542,7 @@ fn main() {
                 // el sujeto se acerca mientras uno esta jugando: borde rojo latiendo
                 if maquina_en_laberinto {
                     let d = est.dist_enemigo();
-                    let alerta = PISOS[piso].dist_alerta;
+                    let alerta = alerta_de(&inf, piso);
                     if d < alerta {
                         let t = (1.0 - d / alerta).clamp(0.0, 1.0);
                         let pulso = 0.5 + 0.5 * (anim.total * 8.0).sin();
@@ -1376,10 +1611,13 @@ fn main() {
                 }
 
                 est.perseguir(dt);
+                // la celda que se pisa se revela siempre, incluso quieto y
+                // aunque se juegue en 2D, donde no hay rayos que revelen
+                est.revelar_jugador();
 
                 // intensidad segun que tan encima esta la sombra. Sale de lo que
                 // Estado ya expone: no hace falta meterle audio adentro.
-                let cerca = (1.0 - est.dist_enemigo() / PISOS[piso].dist_alerta).clamp(0.0, 1.0);
+                let cerca = (1.0 - est.dist_enemigo() / alerta_de(&inf, piso)).clamp(0.0, 1.0);
                 audio.tension(dt, est.persiguiendo, cerca);
 
                 if rl.is_key_pressed(KeyboardKey::KEY_M) {
@@ -1403,7 +1641,12 @@ fn main() {
                     // llego a la salida: cierra la partida. Con la cuota ya pagada
                     // el final es el de pagar, no el de haberse escapado corriendo;
                     // el resto lo bifurca sola la Victoria segun salio_voluntario.
-                    if pago_cuota {
+                    if inf.is_some() {
+                        // en infinito escaparse no es el final: es el pasaje al
+                        // piso que sigue, y arranca de nuevo por la maquina
+                        avanzar_infinito = true;
+                        fundido.ir_a(Escena::Maquina);
+                    } else if pago_cuota {
                         fundido.ir_a(Escena::Exito);
                     } else {
                         fundido.ir_a(Escena::Victoria);
@@ -1422,7 +1665,7 @@ fn main() {
                 dh.clear_background(BG);
 
                 if est.modo3d {
-                  let zbuffer = render_3d(&mut dh, &est, &texturas, tex_piso.as_ref(), tex_techo.as_ref(), usar_tex);
+                  let zbuffer = render_3d(&mut dh, &mut est, &texturas, tex_piso.as_ref(), tex_techo.as_ref(), usar_tex);
                   if est.persiguiendo {
                         render::render_sombra(&mut dh, &est, &zbuffer);
                   }
@@ -1432,7 +1675,7 @@ fn main() {
                 }
 
                 // el apagon solo aplica cuando el sujeto anda suelto
-                let alerta = PISOS[piso].dist_alerta;
+                let alerta = alerta_de(&inf, piso);
                 if est.persiguiendo && dist_e < alerta {
     let t = (1.0 - dist_e / alerta).clamp(0.0, 1.0);
     // el centro nunca se cierra del todo: siempre te queda por donde mirar
@@ -1483,8 +1726,13 @@ fn main() {
                 } else {
                     "llega a la salida"
                 };
+                // en infinito no hay total que mostrar: el contador sube y ya
+                let ronda = match &inf {
+                    Some(i) => format!("piso {}", i.n),
+                    None => format!("ronda {}/{}", piso + 1, PISOS.len()),
+                };
                 dibujar_texto(&mut dh, &fuentes,
-                    &format!("[{}]  ronda {}/{}  -  {}", modo, piso + 1, PISOS.len(), objetivo),
+                    &format!("[{}]  {}  -  {}", modo, ronda, objetivo),
                     12, VIEW_H + 8, 24, TEXTO,
                 );
                 // la distancia al sujeto solo cuando de verdad anda suelto
@@ -1521,14 +1769,14 @@ fn main() {
                 }
 
                 let cx = ANCHO / 2;
-                let cfg = PISOS[piso];
+                let nombre = nombre_de(&inf, piso);
                 let mut dh = rl.begin_drawing(&thread);
                 dh.clear_background(Color { r: 0, g: 0, b: 0, a: 255 });
 
                 texto_vhs(&mut dh, &fuentes, "CUMPLISTE LA CUOTA", cx,
                     VIEW_H / 2 - 96 + flota(tiempo, 1.4, 5.0), 52, DORADO, tiempo);
                 texto_centrado(&mut dh, &fuentes,
-                    &format!("{}  -  {} de {} creditos", cfg.nombre, maq.creditos, maq.cuota),
+                    &format!("{}  -  {} de {} creditos", nombre, maq.creditos, maq.cuota),
                     cx, VIEW_H / 2 - 12, 30, TEXTO);
                 texto_centrado(&mut dh, &fuentes, "te vas caminando, no corriendo",
                     cx, VIEW_H / 2 + 36, 26, CYAN);
@@ -1553,7 +1801,7 @@ fn main() {
                 // HUD, VIEW_H dejaba todo 20px arriba del centro real.
                 let cx = ANCHO / 2;
                 let cy = ALTO / 2;
-                let cfg = PISOS[piso];
+                let nombre = nombre_de(&inf, piso);
                 let mut dh = rl.begin_drawing(&thread);
                 dh.clear_background(Color { r: 0, g: 0, b: 0, a: 255 });
 
@@ -1563,7 +1811,7 @@ fn main() {
                     texto_centrado(&mut dh, &fuentes, "TE FUISTE", cx,
                         cy - 96 + flota(tiempo, 0.8, 2.0), 58, LATON);
                     texto_centrado(&mut dh, &fuentes,
-                        &format!("{}  -  {} de {} creditos", cfg.nombre, maq.creditos, maq.cuota),
+                        &format!("{}  -  {} de {} creditos", nombre, maq.creditos, maq.cuota),
                         cx, cy - 12, 30, LATON_TENUE);
                     texto_centrado(&mut dh, &fuentes, "te vas con lo que trajiste",
                         cx, cy + 36, 26, LATON_TENUE);
@@ -1573,7 +1821,7 @@ fn main() {
                     texto_vhs(&mut dh, &fuentes, "ESCAPASTE", cx,
                         cy - 96 + flota(tiempo, 1.6, 5.0), 58, NEON, tiempo);
                     texto_centrado(&mut dh, &fuentes,
-                        &format!("{}  -  llegaste a la salida", cfg.nombre),
+                        &format!("{}  -  llegaste a la salida", nombre),
                         cx, cy - 12, 30, TEXTO);
                     texto_centrado(&mut dh, &fuentes, "saliste corriendo, pero saliste",
                         cx, cy + 36, 26, CYAN);
@@ -1622,5 +1870,6 @@ fn main() {
                 fundido.velo(&mut dh);
             }
         }
+
     }
 }

@@ -25,9 +25,34 @@ pub struct Impacto {
 /// por cos(ang - est.a), y render_2d necesita la radial para plotear. Devolver
 /// la perpendicular desde aca la corregiria dos veces.
 pub fn lanzar_dda(grid: &[Vec<char>], x: f32, y: f32, ang: f32) -> Impacto {
+    lanzar_dda_visitando(grid, x, y, ang, |_, _| {})
+}
+
+/// Igual que lanzar_dda(), pero avisa por `visitar` cada celda que el rayo
+/// pisa, en orden y arrancando por la del origen. La usa el fog of war del
+/// minimapa: el DDA ya sabe exactamente que celdas atraviesa, asi que revelar
+/// lo que se ve no cuesta un segundo recorrido.
+///
+/// La celda del impacto tambien se visita: la pared que corta la vista se ve, y
+/// si no se revelara el minimapa quedaria con agujeros justo en los bordes.
+///
+/// El visitante es generico y no un `&mut dyn`: con el cierre vacio de
+/// lanzar_dda() el monomorfizado lo borra entero, asi que la version que no
+/// revela nada no paga nada.
+pub fn lanzar_dda_visitando(
+    grid: &[Vec<char>],
+    x: f32,
+    y: f32,
+    ang: f32,
+    mut visitar: impl FnMut(i32, i32),
+) -> Impacto {
     let (dx, dy) = (ang.cos(), ang.sin());
     let mut celda_x = x.floor() as i32;
     let mut celda_y = y.floor() as i32;
+
+    // la celda del origen cuenta como visitada, y se avisa antes del caso
+    // degenerado para que salga por los dos caminos y no solo por el normal
+    visitar(celda_x, celda_y);
 
     // Caso degenerado: el rayo arranca adentro de una pared. No pasa mientras
     // libre() cuide el movimiento, pero si pasara el DDA saldria a buscar la
@@ -111,6 +136,11 @@ pub fn lanzar_dda(grid: &[Vec<char>], x: f32, y: f32, ang: f32) -> Impacto {
         if d >= MAX_DIST {
             return Impacto { d: MAX_DIST, ch: '+', tx: 0.0 };
         }
+
+        // recien aca, y no apenas se avanzan los indices: la celda que cae mas
+        // alla de MAX_DIST no se llega a mirar, asi que tampoco se visita. Se
+        // visita exactamente lo mismo que se consulta.
+        visitar(celda_x, celda_y);
 
         // se consulta por el centro de la celda y no por el punto de impacto:
         // ese punto cae justo sobre el borde y el redondeo lo puede tirar a la

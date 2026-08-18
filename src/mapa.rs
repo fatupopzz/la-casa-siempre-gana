@@ -8,7 +8,15 @@ pub const RADIO: f32 = 0.24;
 pub fn cargar(path: &str) -> Vec<Vec<char>> {
     let txt = fs::read_to_string(path)
         .unwrap_or_else(|_| panic!("no encontre '{}'. Corre: cargo run --bin gen", path));
+    desde_texto(&txt)
+}
 
+/// El mismo parseo que cargar() pero sobre texto ya en memoria: lo usa el modo
+/// infinito, que genera el mapa en runtime y nunca lo escribe a disco.
+///
+/// Las filas se rellenan hasta la mas larga porque el resto del motor asume
+/// grid rectangular (cols() lee grid[0] y de ahi salen todos los indices).
+pub fn desde_texto(txt: &str) -> Vec<Vec<char>> {
     let mut grid: Vec<Vec<char>> = txt
         .lines()
         .filter(|l| !l.trim().is_empty())
