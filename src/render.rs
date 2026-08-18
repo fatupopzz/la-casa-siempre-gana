@@ -24,6 +24,32 @@ const STEP_PISO: i32 = 2; // alto en px de cada tira draw_rectangle
 /// tenerla encima. Con el piso se ve venir por el pasillo, que es lo que te
 /// deja esquivarla en vez de comerte el susto.
 const VIS_MIN_SOMBRA: f32 = 0.55;
+// --- post-proceso de atmosfera ---
+// Van juntas y arriba porque se calibran de a una contra la escena entera: son
+// tres capas que se suman encima de todo y por separado ninguna se entiende.
+//
+// Dos senos multiplicados y no uno solo: uno solo late con periodo fijo y el
+// ojo lo engancha en dos segundos. Al multiplicar dos frecuencias que no son
+// multiplo una de la otra, el patron tarda muchisimo en repetirse y se lee como
+// un tubo que no termina de arrancar.
+const PARPADEO_LENTO: f32 = 2.3;
+const PARPADEO_RAPIDO: f32 = 17.0;
+/// Alpha maximo del parpadeo. Chico A PROPOSITO: mas arriba de esto el velo se
+/// come el neon rosa de la maquina, que tiene que seguir siendo lo mas claro de
+/// la escena porque es lo que te dice para donde ir.
+const PARPADEO_ALPHA_MAX: f32 = 38.0;
+/// Cuanto de cada lado ocupa su banda de vineta, en fraccion de esa dimension.
+/// Las bandas se pisan en las esquinas y ahi el negro va doble: eso se busca,
+/// es lo que redondea la imagen y deja el centro como unico lugar legible.
+const VINETA_FRAC: f32 = 0.18;
+const VINETA_ALPHA: u8 = 170;
+const GRANO_ALPHA: u8 = 25;
+/// Cada cuanto salta el recorte del grano, en pasos por segundo. Alto para que
+/// caiga un salto por cuadro a cualquier framerate razonable: si el offset se
+/// moviera de a poco, el grano se leeria como una textura que se desliza por la
+/// pantalla en vez de como ruido.
+const GRANO_PASOS: f32 = 1000.0;
+
 const SPRITE_FRAMES: usize = 4;
 const SPRITE_FPS: f32 = 4.0;
 /// Ciclo de caminado de la silueta, en 4 poses discretas: contacto, paso,
@@ -314,6 +340,74 @@ pub fn render_3d(
     }
 
     zbuffer
+}
+
+/// Post-proceso de atmosfera: parpadeo, vineta y grano, en ese orden y todo
+/// encima de lo que ya se dibujo. No lee el Estado ni el mundo, solo el reloj:
+/// es una capa de presentacion y por eso no toca render_3d ni la sombra.
+///
+/// Se recorta a 0..VIEW_H a mano en cada capa. La franja del HUD empieza justo
+/// en VIEW_H y tiene que quedar plana y legible: si el parpadeo o la vineta se
+/// le metieran encima, el texto lateria junto con la escena.
+///
+/// `grano` es Option porque la textura se genera en runtime y puede no estar:
+/// sin ella el resto del post igual corre. No hay unwrap en ningun lado.
+pub fn render_post(
+    dh: &mut RaylibDrawHandle<'_>,
+    t: f32,
+    grano: Option<&Texture2D>,
+) {
+    // ---- a) parpadeo del tubo
+    // el producto de los dos senos cae en -1..1 y el abs lo dobla a 0..1, asi
+    // que el alpha nunca se pasa de PARPADEO_ALPHA_MAX ni se va a negativo
+    let lento = (t * PARPADEO_LENTO).sin();
+    let rapido = (t * PARPADEO_RAPIDO).sin();
+    let parpadeo = (lento * rapido).abs() * PARPADEO_ALPHA_MAX;
+    dh.draw_rectangle(0, 0, ANCHO, VIEW_H, Color { r: 0, g: 0, b: 0, a: parpadeo as u8 });
+
+    // ---- b) vineta
+    // OJO con el orden de los colores: draw_rectangle_gradient_v va de ARRIBA
+    // (color1) a ABAJO (color2) y la _h de IZQUIERDA a DERECHA, que es lo que
+    // hace raylib en C. El doc del binding de Rust dice lo contrario ("from
+    // bottom to top"); esta mal, y creerle deja la vineta al reves, clara en el
+    // borde y oscura en el medio.
+    let banda_v = (VIEW_H as f32 * VINETA_FRAC) as i32;
+    let banda_h = (ANCHO as f32 * VINETA_FRAC) as i32;
+    let opaco = Color { r: 0, g: 0, b: 0, a: VINETA_ALPHA };
+    let claro = Color { r: 0, g: 0, b: 0, a: 0 };
+
+    dh.draw_rectangle_gradient_v(0, 0, ANCHO, banda_v, opaco, claro);
+    dh.draw_rectangle_gradient_v(0, VIEW_H - banda_v, ANCHO, banda_v, claro, opaco);
+    dh.draw_rectangle_gradient_h(0, 0, banda_h, VIEW_H, opaco, claro);
+    dh.draw_rectangle_gradient_h(ANCHO - banda_h, 0, banda_h, VIEW_H, claro, opaco);
+
+    // ---- c) grano
+    let Some(tex) = grano else { return };
+
+    // La textura es mas grande que la vista, asi que el recorte se puede mover
+    // dentro del sobrante sin envolver nunca: por eso el offset se escala
+    // contra lo que sobra y no contra el tamano entero.
+    let sobra_x = (tex.width - ANCHO).max(0) as f32;
+    let sobra_y = (tex.height - VIEW_H).max(0) as f32;
+
+    // Salto por cuadro, derivado de t y no de rand: se cuantiza el reloj y se
+    // hashea ese entero, asi que dos cuadros seguidos caen en lugares sin
+    // relacion entre si y la misma t siempre da el mismo recorte.
+    let paso = (t * GRANO_PASOS) as i64 as u64;
+    let h = paso
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
+    let hx = ((h >> 33) & 0xffff) as f32 / 65535.0;
+    let hy = ((h >> 17) & 0xffff) as f32 / 65535.0;
+
+    dh.draw_texture_pro(
+        tex,
+        Rectangle::new(sobra_x * hx, sobra_y * hy, ANCHO as f32, VIEW_H as f32),
+        Rectangle::new(0.0, 0.0, ANCHO as f32, VIEW_H as f32),
+        Vector2::zero(),
+        0.0,
+        Color { r: 255, g: 255, b: 255, a: GRANO_ALPHA },
+    );
 }
 
 pub fn render_minimapa(dh: &mut RaylibDrawHandle<'_>, est: &Estado) {

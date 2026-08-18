@@ -464,6 +464,15 @@ const PLACA_W: f32 = 400.0; // celda del spritesheet
 const PLACA_H: f32 = 160.0;
 const PLACA_RATIO: f32 = 2.5;   // 400 / 160, de aca sale el alto destino
 // van en una linea horizontal, que es como se navega con A/D
+// Grano de pelicula del post-proceso. Se genera con ruido blanco en vez de
+// venir de un png: es ruido, no arte, y generarlo evita otro asset que se
+// pueda perder. Mas grande que ANCHO x VIEW_H (960x600) a proposito, para que
+// el recorte de cada cuadro se mueva dentro del sobrante sin envolver.
+const GRANO_W: i32 = 1216;
+const GRANO_H: i32 = 896;
+/// Fraccion de pixeles blancos. Bajo: el grano tiene que ensuciar, no nevar.
+const GRANO_FACTOR: f32 = 0.12;
+
 // misma hoja pero de una sola fila (800x160): la placa del modo infinito
 const RUTA_PLACA_INF: &str = "assets/sprites/placa_infinito.png";
 const PLACA_ANCHO: f32 = 0.28;  // fraccion de ANCHO -> 269x108
@@ -866,6 +875,18 @@ fn main() {
             "aviso: no encontre {}, las placas van dibujadas con rects",
             RUTA_PLACAS
         ),
+    }
+
+    // El grano se arma una sola vez: generar ruido por cuadro costaria una
+    // imagen entera cada frame. Si la carga falla queda en None y render_post
+    // simplemente no dibuja esa capa — el juego no se cae por un efecto.
+    let grano_tex = {
+        let img = Image::gen_image_white_noise(GRANO_W, GRANO_H, GRANO_FACTOR);
+        rl.load_texture_from_image(&thread, &img).ok()
+    };
+    match &grano_tex {
+        Some(tex) => tex.set_texture_filter(&thread, TextureFilter::TEXTURE_FILTER_POINT),
+        None => eprintln!("aviso: no pude crear la textura de grano, el post va sin ella"),
     }
 
     let placa_inf = rl.load_texture(&thread, RUTA_PLACA_INF).ok();
@@ -1669,6 +1690,15 @@ fn main() {
                   if est.persiguiendo {
                         render::render_sombra(&mut dh, &est, &zbuffer);
                   }
+                    // el post va sobre la escena pero ANTES del minimapa: el
+                    // minimapa vive en la esquina, que es justo donde las dos
+                    // bandas de la vineta se pisan y el negro va doble. Detras
+                    // del post no se leeria.
+                    //
+                    // t = est.anim_t, que es el reloj que ya usa esta escena
+                    // para lo demas (el flicker del apagon, el pulso de la F).
+                    // Avanza siempre, incluso con la sombra apagada.
+                    render::render_post(&mut dh, est.anim_t, grano_tex.as_ref());
                     render_minimapa(&mut dh, &est);
                 } else {
                     render_2d(&mut dh, &est);
