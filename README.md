@@ -4,6 +4,13 @@ Ray caster en primera persona con temática de horror y casino, desarrollado en 
 
 Una máquina tragamonedas en un cuarto opresivo. Tenés una cuota que cumplir y un número limitado de giros para lograrlo. Si la cumplís, salís. Si no, las paredes se abren en un laberinto y algo empieza a seguirte.
 
+<img width="975" height="624" alt="image" src="https://github.com/user-attachments/assets/6347f906-8f30-4e78-8404-9d05f0a49108" />
+
+<img width="975" height="624" alt="image" src="https://github.com/user-attachments/assets/37144cbc-83ad-4798-9558-e8f62f99df24" />
+
+<img width="975" height="624" alt="image" src="https://github.com/user-attachments/assets/cce12943-f30e-4df7-a4ff-f10e8aab7492" />
+
+
 
 
 ## Controles
