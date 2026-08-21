@@ -3,6 +3,7 @@
 Ray caster en primera persona con temática de horror y casino, desarrollado en Rust con raylib-rs para el curso CC2018 Gráficas por Computadora (UVG).
 
 Link al video de demostracion: [Ver demo en YouTube](https://youtu.be/3fGIWCZBxe0)
+Link al video de demostracion CON SONIDO : [Ver demo en YouTube](https://youtu.be/d6gD7s6qLCg)
 
 Una máquina tragamonedas en un cuarto opresivo. Tenés una cuota que cumplir y un número limitado de giros para lograrlo. Si la cumplís, salís. Si no, las paredes se abren en un laberinto y algo empieza a seguirte.
 
