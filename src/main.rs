@@ -976,11 +976,27 @@ fn main() {
                 if let Some(actual) = &inf {
                     let sig = actual.siguiente();
                     maq = Maquina::nueva(sig.cuota, sig.giros);
+                    // El Estado se rearma sobre el mapa nuevo YA, sin esperar a
+                    // que se entre al laberinto. Entrar lo vuelve a construir
+                    // por entrar_generado(), asi que esto no cambia lo que se
+                    // juega; lo que evita es que entre piso y piso `est` siga
+                    // siendo el del piso anterior, con su grid, su posicion,
+                    // su sombra y su revelado. Cualquier cosa que se agregue
+                    // en la maquina y lea `est` (un minimapa, la distancia a
+                    // la sombra) leeria el piso viejo si no.
+                    //
+                    // Va sin preparar_entrada(): recien en la entrada se sabe
+                    // si fue voluntaria, y de ahi salen modo3d, t_espera y
+                    // persiguiendo. Aca queda quieta y sin perseguir.
+                    est = Estado::de_texto(&sig.mapa, sig.vel_enemigo);
                     inf = Some(sig);
                     anim = AnimRodillos::nueva();
                     maquina_en_laberinto = false;
                     salio_voluntario = false;
                     pago_cuota = false;
+                    // los dos contadores de credito, o el HUD del piso nuevo
+                    // arranca mostrando lo que se junto en el anterior
+                    cred_objetivo = 0;
                     cred_vista = 0.0;
                 }
             }

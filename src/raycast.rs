@@ -10,35 +10,12 @@ pub struct Impacto {
     pub tx: f32,
 }
 
-/// Lanza un rayo por DDA: en vez de muestrear cada tanto, salta de linea de
-/// grilla en linea de grilla, avanzando en cada vuelta a la proxima
-/// interseccion, la vertical o la horizontal, la que caiga mas cerca. El mismo
-/// `if` que elige por donde avanzar es el que dice que orientacion tiene la
-/// cara golpeada, asi que no hay ambiguedad al clasificarla. Da la distancia
-/// exacta al impacto y visita solo las celdas que el rayo realmente atraviesa.
-///
-/// El caso delicado es el empate exacto dist_x == dist_y, que fue el bug real
-/// de esta implementacion: se resuelve cruzando el vertice en diagonal, ver el
-/// comentario en la rama.
-///
-/// `d` sale RADIAL: la correccion de fisheye la hace render_3d multiplicando
-/// por cos(ang - est.a), y render_2d necesita la radial para plotear. Devolver
-/// la perpendicular desde aca la corregiria dos veces.
+
 pub fn lanzar_dda(grid: &[Vec<char>], x: f32, y: f32, ang: f32) -> Impacto {
     lanzar_dda_visitando(grid, x, y, ang, |_, _| {})
 }
 
-/// Igual que lanzar_dda(), pero avisa por `visitar` cada celda que el rayo
-/// pisa, en orden y arrancando por la del origen. La usa el fog of war del
-/// minimapa: el DDA ya sabe exactamente que celdas atraviesa, asi que revelar
-/// lo que se ve no cuesta un segundo recorrido.
-///
-/// La celda del impacto tambien se visita: la pared que corta la vista se ve, y
-/// si no se revelara el minimapa quedaria con agujeros justo en los bordes.
-///
-/// El visitante es generico y no un `&mut dyn`: con el cierre vacio de
-/// lanzar_dda() el monomorfizado lo borra entero, asi que la version que no
-/// revela nada no paga nada.
+
 pub fn lanzar_dda_visitando(
     grid: &[Vec<char>],
     x: f32,
